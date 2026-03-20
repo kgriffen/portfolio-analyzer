@@ -872,21 +872,90 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
   const closed = periodChains.filter(c => c.status === 'closed');
   const open   = periodChains.filter(c => c.status === 'open');
 
-  // P&L: for period, use legs whose date falls in period
-  const periodPnl = periodChains.reduce((sum, ch) => {
-    const legSum = ch.legs
-      .filter(l => l.date >= periodStart && l.date <= periodEnd)
-      .reduce((s, l) => s + l.total, 0);
-    return sum + legSum;
-  }, 0);
+  // periodPnl derived from realized daily series (built below).
+  let periodPnl = 0;
 
-  // Daily P&L series (all rows in period)
+  // Daily P&L series — REALIZED only.
+  // Equity BTO/STC require special handling: a BTO is capital allocation into an
+  // asset, NOT a P&L loss. We only book equity P&L when the position is closed
+  // (STC proceeds minus the average cost basis of the lot sold).
+  // Options and futures are always fully realized when the row appears.
   const dayMap = {};
-  allRows.forEach(r => {
-    if ((r.type === 'Trade' || r.type === 'Receive Deliver') &&
-        r.date >= periodStart && r.date <= periodEnd) {
-      const k = ds(r.date);
-      dayMap[k] = (dayMap[k] || 0) + r.total;
+  const _eqCost = {}; // symbol -> { qty, totalCost } running average cost basis
+
+  // Process ALL rows chronologically (not filtered to period) so cost basis
+  // is correct even for positions opened before the period starts.
+  const allRowsSorted = [...allRows].sort((a, b) => a.date - b.date);
+
+  allRowsSorted.forEach(r => {
+    if (r.type === 'Money Movement') {
+      // Include dividends, interest etc. but NOT transfers/deposits/withdrawals
+      if (!['Transfer','Deposit','Withdrawal','Mark to Market'].includes(r.subType)) {
+        if (r.date >= periodStart && r.date <= periodEnd) {
+          const k = ds(r.date);
+          dayMap[k] = (dayMap[k] || 0) + r.total;
+        }
+      }
+      return;
+    }
+    if (r.type !== 'Trade' && r.type !== 'Receive Deliver') return;
+
+    if (r.instrType === 'EQ' && r.type === 'Trade') {
+      // Equity: track cost basis, only book realized P&L on close
+      const sym = r.symbol;
+      if (!_eqCost[sym]) _eqCost[sym] = { qty: 0, totalCost: 0 };
+      const pos = _eqCost[sym];
+      const isBuy = r.action.includes('BUY') || r.action === 'BUY';
+      const isSell = r.action.includes('SELL');
+      const qty = Math.abs(r.qty);
+
+      if (isBuy) {
+        if (pos.qty < -1e-6) {
+          // Covering a short — realize P&L
+          const coverQty = Math.min(qty, Math.abs(pos.qty));
+          const avgShortProceeds = pos.totalCost / Math.abs(pos.qty);
+          const realized = avgShortProceeds * coverQty + r.total * (coverQty / qty);
+          if (r.date >= periodStart && r.date <= periodEnd) {
+            const k = ds(r.date);
+            dayMap[k] = (dayMap[k] || 0) + realized;
+          }
+          pos.qty += coverQty;
+          pos.totalCost -= avgShortProceeds * coverQty;
+          const rem = qty - coverQty;
+          if (rem > 1e-6) { pos.qty += rem; pos.totalCost += r.total * (rem / qty); }
+        } else {
+          // Opening long — accumulate cost basis, NO P&L
+          pos.qty += qty;
+          pos.totalCost += r.total; // negative (cash outflow)
+        }
+      } else if (isSell) {
+        if (pos.qty > 1e-6) {
+          // Closing long — realize P&L = proceeds + cost basis of lot sold
+          const sellQty = Math.min(qty, pos.qty);
+          const avgCost = pos.totalCost / pos.qty;
+          const costOfSold = avgCost * sellQty;
+          const proceeds = r.total * (sellQty / qty);
+          const realized = proceeds + costOfSold; // costOfSold is negative, proceeds positive
+          if (r.date >= periodStart && r.date <= periodEnd) {
+            const k = ds(r.date);
+            dayMap[k] = (dayMap[k] || 0) + realized;
+          }
+          pos.qty -= sellQty;
+          pos.totalCost -= costOfSold;
+          const rem = qty - sellQty;
+          if (rem > 1e-6) { pos.qty -= rem; pos.totalCost += r.total * (rem / qty); }
+        } else {
+          // Opening short — defer (book when covered)
+          pos.qty -= qty;
+          pos.totalCost += r.total; // positive (short proceeds received)
+        }
+      }
+    } else {
+      // Options, futures, Receive Deliver (expirations/assignments) — always realized
+      if (r.date >= periodStart && r.date <= periodEnd) {
+        const k = ds(r.date);
+        dayMap[k] = (dayMap[k] || 0) + r.total;
+      }
     }
   });
   const sortedDays = Object.keys(dayMap).sort();
@@ -895,6 +964,8 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
     cum += dayMap[d];
     return { date: d, daily: dayMap[d], cum };
   });
+  // periodPnl = sum of all realized daily P&L in period (equity-corrected)
+  periodPnl = Object.values(dayMap).reduce((s, v) => s + v, 0);
 
   const returns = dailySeries.map(d => d.daily);
   const n = returns.length;
@@ -950,9 +1021,10 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
   cfws.push({ date: periodEnd, a: endEquity });
   const irr = xirr(cfws);
 
-  // Fees
+  // Fees — options/futures only; equity BTO fees are embedded in cost basis
   const totalFees = allRows
     .filter(r => (r.type === 'Trade' || r.type === 'Receive Deliver') &&
+                  r.instrType !== 'EQ' &&
                   r.date >= periodStart && r.date <= periodEnd)
     .reduce((s, r) => s + Math.abs(r.comm) + Math.abs(r.fees), 0);
 
@@ -1248,11 +1320,11 @@ function renderAll() {
 // ─────────────────────────────────────────────
 //  FORMATTERS
 // ─────────────────────────────────────────────
-const f$ = (n,d=0) => {
+const fDollar = (n,d=0) => {
   if(!isFinite(n)||isNaN(n)) return '—';
   return (n<0?'-':'')+'$'+Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
 };
-const f% = (n,d=1) => {
+const fPct = (n,d=1) => {
   if(!isFinite(n)||isNaN(n)) return '—';
   return (n>=0?'+':'')+( n*100).toFixed(d)+'%';
 };
@@ -1267,24 +1339,24 @@ const fR = n => {
 // ─────────────────────────────────────────────
 function renderKPIs(M) {
   const K = [
-    { lb:'Total P&L', bar:'gn', v:f$(M.periodPnl), cl:M.periodPnl>=0?'pos':'neg',
+    { lb:'Total P&L', bar:'gn', v:fDollar(M.periodPnl), cl:M.periodPnl>=0?'pos':'neg',
       s:`${M.tradeable} closed trades`, tip:'Net profit/loss on ALL transactions (trades + assignments + expirations) using the Total field which includes commissions and fees.' },
-    { lb:'CAGR', bar:'bl', v:f%(M.cagr), cl:M.cagr>=.1?'pos':M.cagr<0?'neg':'warn',
+    { lb:'CAGR', bar:'bl', v:fPct(M.cagr), cl:M.cagr>=.1?'pos':M.cagr<0?'neg':'warn',
       s:`${M.yrs.toFixed(1)}yr vs $${(M.startEquity/1000).toFixed(0)}k funded`,
       tip:'Compound Annual Growth Rate based on account transfer/deposit history as the starting equity base.' },
     { lb:'Sharpe', bar:M.sharpe>=1?'gn':M.sharpe<0?'rd':'am', v:fR(M.sharpe), cl:M.sharpe>=1?'pos':M.sharpe<0?'neg':'warn',
       s:`Sortino: ${fR(M.sortino)}`,
       tip:'Annualized Sharpe ratio (0% risk-free rate). >1 = good, >2 = excellent. Sortino only penalizes downside deviation.' },
-    { lb:'Max Drawdown', bar:M.maxDD<.1?'gn':M.maxDD<.25?'am':'rd', v:f%(-M.maxDD), cl:M.maxDD<.1?'pos':M.maxDD<.25?'warn':'neg',
+    { lb:'Max Drawdown', bar:M.maxDD<.1?'gn':M.maxDD<.25?'am':'rd', v:fPct(-M.maxDD), cl:M.maxDD<.1?'pos':M.maxDD<.25?'warn':'neg',
       s:`MAR: ${fR(M.mar)}`, tip:'Largest peak-to-trough decline in cumulative P&L. MAR = CAGR ÷ Max Drawdown.' },
-    { lb:'IRR', bar:'te', v:f%(M.irr), cl:M.irr>=0?'pos':'neg',
+    { lb:'IRR', bar:'te', v:fPct(M.irr), cl:M.irr>=0?'pos':'neg',
       s:'vs deposits/transfers', tip:'Internal Rate of Return accounting for the timing of all deposits and withdrawals.' },
-    { lb:'Win Rate', bar:M.winRate>=.5?'gn':'am', v:f%(M.winRate,0), cl:M.winRate>=.5?'pos':'warn',
+    { lb:'Win Rate', bar:M.winRate>=.5?'gn':'am', v:fPct(M.winRate,0), cl:M.winRate>=.5?'pos':'warn',
       s:`${M.wins}W / ${M.losses}L`, tip:'% of closed chains (trades) with positive total P&L. Each chain = one logical trade including all rolls.' },
     { lb:'Profit Factor', bar:M.profFac>=1.5?'gn':M.profFac<1?'rd':'am', v:fR(M.profFac), cl:M.profFac>=1.5?'pos':M.profFac<1?'neg':'warn',
-      s:`Avg W: ${f$(M.avgWin)} / L: ${f$(M.avgLoss)}`, tip:'Gross profit ÷ gross loss. >1.5 is healthy.' },
-    { lb:'Fees + Comm', bar:'co', v:f$(M.totalFees), cl:'neu',
-      s:`Dividends: ${f$(M.dividends)}`, tip:'Total commissions and exchange fees in the period. Dividends shown below.' },
+      s:`Avg W: ${fDollar(M.avgWin)} / L: ${fDollar(M.avgLoss)}`, tip:'Gross profit ÷ gross loss. >1.5 is healthy.' },
+    { lb:'Fees + Comm', bar:'co', v:fDollar(M.totalFees), cl:'neu',
+      s:`Dividends: ${fDollar(M.dividends)}`, tip:'Total commissions and exchange fees in the period. Dividends shown below.' },
   ];
   document.getElementById('kg').innerHTML = K.map(k=>`
     <div class="kpi">
@@ -1293,7 +1365,7 @@ function renderKPIs(M) {
       <div class="ks">${k.s}</div>
       <div class="kab ${k.bar}"></div>
     </div>`).join('');
-  document.getElementById('cum-lbl').textContent = f$(M.periodPnl)+' total';
+  document.getElementById('cum-lbl').textContent = fDollar(M.periodPnl)+' total';
 }
 
 // ─────────────────────────────────────────────
@@ -1531,7 +1603,7 @@ function renderOpenPositions(openChains) {
       <td style="color:var(--t2)">${ch.strategy}</td>
       <td><span class="tag tag-${ch.instrType}">${ENGINE.instrTag(ch.instrType)}</span></td>
       <td style="color:var(--t2)">${ch.symbols.length}</td>
-      <td class="${ch.totalPnl>=0?'cp2':'cn'}">${f$(ch.totalPnl)}</td>
+      <td class="${ch.totalPnl>=0?'cp2':'cn'}">${fDollar(ch.totalPnl)}</td>
       <td style="color:var(--t2)">${ch.openDate?ch.openDate.toLocaleDateString():'—'}</td>
       <td>${ch.daysHeld}d</td>
       <td style="color:var(--t3)">${ch.rollCount||0}</td>
@@ -1603,7 +1675,7 @@ function filterChains() {
       <td style="color:var(--t2)">${ch.closeDate?ch.closeDate.toLocaleDateString():'—'}</td>
       <td>${ch.daysHeld}d</td>
       <td style="color:var(--t3)">${ch.rollCount||0}</td>
-      <td class="${ch.totalPnl>=0?'cp2':'cn'}" style="font-weight:500">${f$(ch.totalPnl)}</td>
+      <td class="${ch.totalPnl>=0?'cp2':'cn'}" style="font-weight:500">${fDollar(ch.totalPnl)}</td>
       <td><span class="tag tag-${ch.totalPnl>=0?'WIN':'LOSS'}">${ch.totalPnl>=0?'WIN':'LOSS'}</span></td>
     </tr>`).join('');
 }
