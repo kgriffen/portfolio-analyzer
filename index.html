@@ -1110,19 +1110,63 @@ const LS_D = 'ptfol_v3_data', LS_C = 'ptfol_gh_cfg', LS_T = 'ptfol_theme';
 //  BOOT
 // ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
+  // Phase 1 — synchronous, cheap setup. Lets the loader paint immediately.
   applyTheme(localStorage.getItem(LS_T) || 'dark', false);
   try { loadCfgToModal(JSON.parse(localStorage.getItem(LS_C)||'{}')); } catch(e){}
-  loadLocal();
   setupDnD();
   const now = new Date();
   document.getElementById('de').value = now.toISOString().split('T')[0];
   const yr = new Date(now); yr.setFullYear(yr.getFullYear()-1);
   document.getElementById('ds').value = yr.toISOString().split('T')[0];
-  setTimeout(() => {
+
+  // Phase 2 — defer the heavy work behind chained setTimeouts so the browser
+  // gets a chance to paint progress text between each step. Without this, a
+  // 7k-row CSV blocks the main thread for ~1-2s and the loader never appears.
+  const lt = document.getElementById('lt');
+  const setMsg = m => { if (lt) lt.textContent = m; };
+  const dismissLoader = () => {
     const l = document.getElementById('ldr');
+    if (!l) return;
     l.classList.add('fade');
     setTimeout(() => l.remove(), 400);
-  }, 800);
+  };
+
+  setMsg('Loading transaction data…');
+  setTimeout(() => {
+    try {
+      const raw = localStorage.getItem(LS_D);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d.csvRows?.length) {
+          S._rawCsvRows = d.csvRows;
+          setMsg(`Parsing ${d.csvRows.length.toLocaleString()} rows…`);
+          setTimeout(() => {
+            S.rawRows = ENGINE.parseRows(S._rawCsvRows);
+            setMsg('Building trade chains…');
+            setTimeout(() => {
+              const { chains } = ENGINE.buildChains(S.rawRows);
+              S.chains = chains;
+              setMsg('Rendering dashboard…');
+              setTimeout(() => {
+                updUZ();
+                renderAll();
+                updSyncUI();
+                dismissLoader();
+              }, 0);
+            }, 0);
+          }, 0);
+          return;
+        }
+      }
+      // No saved data — just dismiss
+      updSyncUI();
+      setTimeout(dismissLoader, 400);
+    } catch(e) {
+      console.error('Boot error', e);
+      setMsg('Error loading data — see console');
+      setTimeout(dismissLoader, 1200);
+    }
+  }, 0);
 });
 
 // ─────────────────────────────────────────────
@@ -1832,10 +1876,8 @@ function updSyncUI(synced=false) {
 // ─────────────────────────────────────────────
 //  INIT
 // ─────────────────────────────────────────────
-setTimeout(()=>{
-  if(S.rawRows.length){updUZ();renderAll();}
-  updSyncUI();
-},120);
+// Boot is handled in the DOMContentLoaded handler above (deferred, with
+// progress messages). Nothing to do here.
 </script>
 </body>
 </html>
