@@ -219,10 +219,11 @@ tbody tr:hover td{background:var(--bg3);}
 <header id="tb">
   <div class="tl">PTFOL<span class="tb-badge">v3</span></div>
   <div class="tsep"></div>
-  <div class="tst"><div class="pdot r" id="sdot"></div><span id="slbl">Not connected</span></div>
+  <div class="tst"><div class="pdot" id="sdot"></div><span id="slbl">Local</span></div>
   <div class="tr">
     <span class="sl" id="synclbl"></span>
-    <button class="btn btn-sm" onclick="openGH()">⬆ GitHub Sync</button>
+    <button class="btn btn-sm" onclick="exportBackup()" title="Download all data as a JSON file">⬇ Export</button>
+    <button class="btn btn-sm" onclick="document.getElementById('imp-fi').click()" title="Restore data from a JSON backup">⬆ Import</button>
     <button class="btn btn-p btn-sm" onclick="document.getElementById('cfi').click()">+ Upload CSV</button>
     <div class="tsep"></div>
     <span style="font-size:11px;color:var(--t3)">🌙</span>
@@ -231,6 +232,7 @@ tbody tr:hover td{background:var(--bg3);}
   </div>
 </header>
 <input type="file" id="cfi" accept=".csv" multiple onchange="handleFiles(this.files)">
+<input type="file" id="imp-fi" accept=".json,application/json" onchange="importBackup(this.files)">
 
 <div id="app">
   <div id="uz" onclick="document.getElementById('cfi').click()">
@@ -238,9 +240,6 @@ tbody tr:hover td{background:var(--bg3);}
     <div class="uztxt">
       <div class="uzt" id="uzt">Drop Tastytrade CSV or click to upload</div>
       <div class="uzs" id="uzs">Equities · Options · Futures · Futures Options — all instrument types supported</div>
-    </div>
-    <div class="uza" onclick="event.stopPropagation()">
-      <button class="btn btn-sm" onclick="openGH()">Pull from GitHub</button>
     </div>
   </div>
 
@@ -411,38 +410,18 @@ tbody tr:hover td{background:var(--bg3);}
   <div id="es">
     <div class="ei">📈</div>
     <div class="eh">Connect your portfolio</div>
-    <div class="ep">Upload a Tastytrade transaction CSV or pull from your GitHub repository to get started.</div>
+    <div class="ep">Upload a Tastytrade transaction CSV to get started. Data is stored locally in your browser — nothing leaves this device.</div>
     <div class="esteps">
       <div class="estep"><div class="snum">1</div><span>Tastytrade: <strong>Account → History → Export CSV</strong></span></div>
       <div class="estep"><div class="snum">2</div><span>Click <strong>Upload CSV</strong> above — upload daily or whenever you trade. Duplicates are auto-skipped.</span></div>
-      <div class="estep"><div class="snum">3</div><span>Click <strong>⬆ GitHub Sync → Push</strong> to save to your repo for cross-device access.</span></div>
-      <div class="estep"><div class="snum">4</div><span>On any device: click <strong>Pull from GitHub</strong> instead of re-uploading.</span></div>
+      <div class="estep"><div class="snum">3</div><span>Use <strong>⬇ Export</strong> any time to save a portable JSON backup of all your data.</span></div>
+      <div class="estep"><div class="snum">4</div><span>On a new device or after a reset, use <strong>⬆ Import</strong> to restore from a backup file.</span></div>
     </div>
     <button class="btn btn-p" onclick="document.getElementById('cfi').click()">Upload Tastytrade CSV</button>
   </div>
 </div>
 
-<!-- GitHub Modal -->
-<div class="veil" id="gh-veil">
-  <div class="modal">
-    <button class="mc" onclick="closeGH()">✕</button>
-    <div class="mh">GitHub Sync</div>
-    <div class="ms">
-      Data is stored as <code>portfolio-data.json</code> in your repo. Push after loading new CSVs. Pull on a new device.<br><br>
-      Create a <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank">Personal Access Token</a> with <code>repo</code> scope.
-    </div>
-    <div class="al al-hd" id="gh-al"></div>
-    <div class="fr"><label class="fl">GitHub Token</label><input class="fi" type="password" id="gh-tok" placeholder="ghp_…" autocomplete="off"><div class="fh">Stored in browser only — sent exclusively to api.github.com</div></div>
-    <div class="fr"><label class="fl">Repository (owner/repo)</label><input class="fi" type="text" id="gh-repo" placeholder="yourusername/portfolio-tracker"></div>
-    <div class="fr"><label class="fl">Branch</label><input class="fi" type="text" id="gh-br" value="main"></div>
-    <div class="fr"><label class="fl">Theme preference (synced)</label><select class="fi" id="gh-th" style="cursor:pointer"><option value="dark">Dark</option><option value="light">Light</option></select></div>
-    <div class="mf">
-      <button class="btn" onclick="closeGH()">Cancel</button>
-      <button class="btn" id="pull-btn" onclick="ghPull()">↓ Pull</button>
-      <button class="btn btn-p" id="push-btn" onclick="ghPush()">↑ Push</button>
-    </div>
-  </div>
-</div>
+<!-- (GitHub modal removed — data is stored locally in IndexedDB) -->
 
 <!-- Engine -->
 <script>
@@ -1104,7 +1083,9 @@ const S = {
   sortState: { pos: { col:'daysHeld', dir:-1 }, chains: { col:'closeDate', dir:-1 } }
 };
 
-const LS_D = 'ptfol_v3_data', LS_C = 'ptfol_gh_cfg', LS_T = 'ptfol_theme';
+const LS_D = 'ptfol_v3_data', LS_T = 'ptfol_theme';
+//  LS_D is the legacy localStorage data dump from earlier versions. We migrate
+//  it into IndexedDB on first boot, then delete it. New saves go to IDB.
 
 // ─────────────────────────────────────────────
 //  BOOT
@@ -1112,16 +1093,15 @@ const LS_D = 'ptfol_v3_data', LS_C = 'ptfol_gh_cfg', LS_T = 'ptfol_theme';
 window.addEventListener('DOMContentLoaded', () => {
   // Phase 1 — synchronous, cheap setup. Lets the loader paint immediately.
   applyTheme(localStorage.getItem(LS_T) || 'dark', false);
-  try { loadCfgToModal(JSON.parse(localStorage.getItem(LS_C)||'{}')); } catch(e){}
   setupDnD();
   const now = new Date();
   document.getElementById('de').value = now.toISOString().split('T')[0];
   const yr = new Date(now); yr.setFullYear(yr.getFullYear()-1);
   document.getElementById('ds').value = yr.toISOString().split('T')[0];
 
-  // Phase 2 — defer the heavy work behind chained setTimeouts so the browser
-  // gets a chance to paint progress text between each step. Without this, a
-  // 7k-row CSV blocks the main thread for ~1-2s and the loader never appears.
+  // Phase 2 — async load from IndexedDB. Defer behind requestAnimationFrame so
+  // the loader paints before we touch the DB. Each long step also yields back
+  // to the browser via setTimeout(..., 0) so progress messages can render.
   const lt = document.getElementById('lt');
   const setMsg = m => { if (lt) lt.textContent = m; };
   const dismissLoader = () => {
@@ -1130,43 +1110,53 @@ window.addEventListener('DOMContentLoaded', () => {
     l.classList.add('fade');
     setTimeout(() => l.remove(), 400);
   };
+  const yieldUI = () => new Promise(res => setTimeout(res, 0));
 
-  setMsg('Loading transaction data…');
-  setTimeout(() => {
+  requestAnimationFrame(async () => {
     try {
-      const raw = localStorage.getItem(LS_D);
-      if (raw) {
-        const d = JSON.parse(raw);
-        if (d.csvRows?.length) {
-          S._rawCsvRows = d.csvRows;
-          setMsg(`Parsing ${d.csvRows.length.toLocaleString()} rows…`);
-          setTimeout(() => {
-            S.rawRows = ENGINE.parseRows(S._rawCsvRows);
-            setMsg('Building trade chains…');
-            setTimeout(() => {
-              const { chains } = ENGINE.buildChains(S.rawRows);
-              S.chains = chains;
-              setMsg('Rendering dashboard…');
-              setTimeout(() => {
-                updUZ();
-                renderAll();
-                updSyncUI();
-                dismissLoader();
-              }, 0);
-            }, 0);
-          }, 0);
-          return;
-        }
+      setMsg('Checking local database…');
+      await yieldUI();
+
+      // One-time migration from legacy localStorage dump
+      const mig = await migrateFromLocalStorageIfNeeded();
+      if (mig.migrated > 0) {
+        setMsg(`Migrated ${mig.migrated.toLocaleString()} rows from old storage…`);
+        await yieldUI();
       }
-      // No saved data — just dismiss
-      updSyncUI();
-      setTimeout(dismissLoader, 400);
+
+      const count = await idbCount();
+      if (!count) {
+        // No data — show empty state and dismiss
+        setTimeout(dismissLoader, 200);
+        return;
+      }
+
+      setMsg(`Loading ${count.toLocaleString()} rows from local database…`);
+      await yieldUI();
+      const rows = await idbGetAll();
+      S._rawCsvRows = rows;
+
+      setMsg(`Parsing ${rows.length.toLocaleString()} rows…`);
+      await yieldUI();
+      S.rawRows = ENGINE.parseRows(rows);
+
+      setMsg('Building trade chains…');
+      await yieldUI();
+      const { chains } = ENGINE.buildChains(S.rawRows);
+      S.chains = chains;
+
+      setMsg('Rendering dashboard…');
+      await yieldUI();
+      updUZ();
+      renderAll();
+      document.getElementById('synclbl').textContent = `${rows.length.toLocaleString()} rows · stored locally`;
+      dismissLoader();
     } catch(e) {
       console.error('Boot error', e);
       setMsg('Error loading data — see console');
-      setTimeout(dismissLoader, 1200);
+      setTimeout(dismissLoader, 1500);
     }
-  }, 0);
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -1176,7 +1166,6 @@ function toggleTheme() { applyTheme(S.theme==='dark'?'light':'dark', true); }
 function applyTheme(t, save=true) {
   S.theme = t;
   document.documentElement.setAttribute('data-theme', t);
-  document.getElementById('gh-th').value = t;
   if (save) { localStorage.setItem(LS_T, t); if (S.rawRows.length) renderCharts(); }
 }
 
@@ -1242,46 +1231,210 @@ function ingest(csvRows) {
 
   showAlert(`Loaded ${totalParsed} rows — ${added} new, ${totalParsed-added} duplicates skipped. Built ${chains.length} chains.`, 'ok');
   updUZ();
-  saveLocal();
+  // Persist only the *new* rows to IDB (append-only, not a full re-dump)
+  saveRows(newRows);
   renderAll();
 }
 
 // ─────────────────────────────────────────────
-//  STORAGE (raw CSV rows → GitHub format)
+//  STORAGE — IndexedDB primary store
 // ─────────────────────────────────────────────
-function saveLocal() {
-  try {
-    localStorage.setItem(LS_D, JSON.stringify({
-      csvRows: S._rawCsvRows || [],
-      saved: new Date().toISOString()
-    }));
-    document.getElementById('synclbl').textContent = 'Saved ' + new Date().toLocaleTimeString();
-  } catch(e) { showAlert('localStorage full — push to GitHub.', 'wa'); }
+//  Object store `rows`: keyed by rowKey(r). Each value is the raw CSV row.
+//  Append-only on ingest. Bulk-read on boot. No size cliff like localStorage.
+//
+//  Theme preference still lives in localStorage (tiny, sync-friendly).
+//  GitHub config (LS_C) and old data dump (LS_D) are removed; we migrate
+//  legacy LS_D into IDB once on first boot of this version.
+
+const IDB_NAME = 'ptfol_v3';
+const IDB_VERSION = 1;
+const IDB_STORE = 'rows';
+
+let _dbPromise = null;
+function db() {
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains(IDB_STORE)) {
+        // We provide our own keys via rowKey(); no autoIncrement.
+        d.createObjectStore(IDB_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return _dbPromise;
 }
 
-function loadLocal() {
-  try {
-    const raw = localStorage.getItem(LS_D);
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    if (d.csvRows?.length) {
-      S._rawCsvRows = d.csvRows;
-      S.rawRows = ENGINE.parseRows(d.csvRows);
-      const { chains } = ENGINE.buildChains(S.rawRows);
-      S.chains = chains;
+async function idbBulkPut(rows) {
+  if (!rows.length) return 0;
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    let written = 0;
+    for (const r of rows) {
+      const k = rowKey(r);
+      store.put(r, k);
+      written++;
     }
-  } catch(e) { console.error('loadLocal error', e); }
+    tx.oncomplete = () => resolve(written);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('IDB transaction aborted'));
+  });
 }
 
-function clearAll() {
-  if (!confirm('Clear all local data? GitHub copy is unaffected.')) return;
-  S.rawRows=[]; S.chains=[]; S._rawCsvRows=[];
-  localStorage.removeItem(LS_D);
+async function idbGetAll() {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readonly');
+    const store = tx.objectStore(IDB_STORE);
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbClear() {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbCount() {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).count();
+    req.onsuccess = () => resolve(req.result || 0);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// One-time migration from the legacy localStorage dump (LS_D = 'ptfol_v3_data')
+// into IndexedDB. Runs at most once per browser; no-op if already migrated or
+// if no legacy data exists.
+const LS_MIGRATED = 'ptfol_idb_migrated';
+async function migrateFromLocalStorageIfNeeded() {
+  if (localStorage.getItem(LS_MIGRATED) === '1') return { migrated: 0, skipped: true };
+  const raw = localStorage.getItem(LS_D);
+  if (!raw) {
+    localStorage.setItem(LS_MIGRATED, '1');
+    return { migrated: 0, skipped: true };
+  }
+  try {
+    const d = JSON.parse(raw);
+    const rows = d.csvRows || [];
+    if (rows.length) await idbBulkPut(rows);
+    localStorage.removeItem(LS_D);
+    localStorage.setItem(LS_MIGRATED, '1');
+    return { migrated: rows.length, skipped: false };
+  } catch(e) {
+    console.error('Migration failed:', e);
+    return { migrated: 0, skipped: true, error: e.message };
+  }
+}
+
+// Save: append new rows to IDB. Called after every successful ingest.
+async function saveRows(rows) {
+  try {
+    await idbBulkPut(rows);
+    document.getElementById('synclbl').textContent = 'Saved ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error('saveRows error', e);
+    showAlert('Could not save to local database: ' + e.message, 'er');
+  }
+}
+
+// Load: pull all rows from IDB into S.
+async function loadAll() {
+  const rows = await idbGetAll();
+  if (rows.length) {
+    S._rawCsvRows = rows;
+    S.rawRows = ENGINE.parseRows(rows);
+    const { chains } = ENGINE.buildChains(S.rawRows);
+    S.chains = chains;
+  }
+  return rows.length;
+}
+
+async function clearAll() {
+  if (!confirm('Clear all local data? This wipes the local database. If you want a backup first, click Export.')) return;
+  try {
+    await idbClear();
+  } catch(e) {
+    showAlert('Could not clear database: ' + e.message, 'er');
+    return;
+  }
+  S.rawRows = []; S.chains = []; S._rawCsvRows = [];
   hideDash();
-  document.getElementById('uzi').textContent='📊';
-  document.getElementById('uzt').textContent='Drop Tastytrade CSV or click to upload';
-  document.getElementById('uzs').textContent='Equities · Options · Futures · Futures Options — all instrument types supported';
-  showAlert('Local data cleared.','in');
+  document.getElementById('uzi').textContent = '📊';
+  document.getElementById('uzt').textContent = 'Drop Tastytrade CSV or click to upload';
+  document.getElementById('uzs').textContent = 'Equities · Options · Futures · Futures Options — all instrument types supported';
+  document.getElementById('synclbl').textContent = '';
+  showAlert('Local data cleared.', 'in');
+}
+
+// ─────────────────────────────────────────────
+//  EXPORT / IMPORT  (portable JSON backups)
+// ─────────────────────────────────────────────
+function exportBackup() {
+  if (!S._rawCsvRows || !S._rawCsvRows.length) {
+    showAlert('Nothing to export — load a CSV first.', 'wa');
+    return;
+  }
+  const payload = {
+    schema: 'ptfol-backup-v1',
+    exportedAt: new Date().toISOString(),
+    rowCount: S._rawCsvRows.length,
+    csvRows: S._rawCsvRows
+  };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `portfolio-backup-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showAlert(`✓ Exported ${S._rawCsvRows.length.toLocaleString()} rows to ${a.download}`, 'ok');
+}
+
+async function importBackup(files) {
+  if (!files || !files.length) return;
+  const f = files[0];
+  document.getElementById('imp-fi').value = ''; // reset so same file can be re-picked
+
+  let payload;
+  try {
+    const text = await f.text();
+    payload = JSON.parse(text);
+  } catch(e) {
+    showAlert('Could not read backup file: ' + e.message, 'er');
+    return;
+  }
+  if (!payload || !Array.isArray(payload.csvRows)) {
+    showAlert('Not a valid PTFOL backup file (missing csvRows array).', 'er');
+    return;
+  }
+  const incoming = payload.csvRows;
+  const existing = S._rawCsvRows ? S._rawCsvRows.length : 0;
+
+  const msg = existing
+    ? `Import ${incoming.length.toLocaleString()} rows from backup?\n\nThis MERGES with your current ${existing.toLocaleString()} rows. Duplicates are skipped automatically.\n\nClick Cancel to abort.`
+    : `Import ${incoming.length.toLocaleString()} rows from backup?`;
+  if (!confirm(msg)) return;
+
+  // Reuse the same dedup pipeline as CSV ingest. ingest() handles save+render.
+  ingest(incoming);
 }
 
 function hideDash() {
@@ -1358,7 +1511,6 @@ function renderAll() {
   renderOpenPositions(openChains);
   renderClosedChains(M.allClosed);
   renderTxTable();
-  updSyncUI();
 }
 
 // ─────────────────────────────────────────────
@@ -1791,93 +1943,14 @@ function updUZ() {
   document.getElementById('uzs').textContent='Click to merge more CSV files — duplicates auto-skipped';
 }
 
-// ─────────────────────────────────────────────
-//  GITHUB SYNC
-// ─────────────────────────────────────────────
-function loadCfgToModal(cfg) {
-  document.getElementById('gh-tok').value=cfg.token||'';
-  document.getElementById('gh-repo').value=cfg.repo||'';
-  document.getElementById('gh-br').value=cfg.branch||'main';
-}
-function openGH() {
-  try{loadCfgToModal(JSON.parse(localStorage.getItem(LS_C)||'{}'));}catch(e){}
-  document.getElementById('gh-th').value=S.theme;
-  document.getElementById('gh-al').classList.add('al-hd');
-  document.getElementById('gh-veil').classList.add('open');
-}
-function closeGH(){document.getElementById('gh-veil').classList.remove('open');}
-document.getElementById('gh-veil').addEventListener('click',e=>{if(e.target===document.getElementById('gh-veil'))closeGH();});
-
-function ghCfg() {
-  const tok=document.getElementById('gh-tok').value.trim();
-  const repo=document.getElementById('gh-repo').value.trim();
-  const br=document.getElementById('gh-br').value.trim()||'main';
-  if(!tok||!repo){showAlert('Enter both token and repository.','er','gh-al');return null;}
-  localStorage.setItem(LS_C,JSON.stringify({token:tok,repo,branch:br}));
-  return{tok,repo,br};
-}
-
-async function ghPush() {
-  const cfg=ghCfg();if(!cfg)return;
-  const btn=document.getElementById('push-btn');btn.textContent='Pushing…';btn.disabled=true;
-  showAlert('Pushing to GitHub…','in','gh-al');
-  const theme=document.getElementById('gh-th').value;applyTheme(theme);
-
-  // Store the raw CSV rows (not parsed rows) for full fidelity reconstruction
-  const payload=JSON.stringify({csvRows:S._rawCsvRows||[],theme,at:new Date().toISOString()},null,2);
-  const enc=btoa(unescape(encodeURIComponent(payload)));
-  try{
-    let sha=null;
-    const chk=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/portfolio-data.json?ref=${cfg.br}`,
-      {headers:{Authorization:`token ${cfg.tok}`,Accept:'application/vnd.github+json'}});
-    if(chk.ok){const j=await chk.json();sha=j.sha;}
-    const body={message:`Portfolio update ${new Date().toLocaleDateString()} (${S.rawRows.length} rows)`,content:enc,branch:cfg.br};
-    if(sha)body.sha=sha;
-    const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/portfolio-data.json`,{
-      method:'PUT',headers:{Authorization:`token ${cfg.tok}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},
-      body:JSON.stringify(body)
-    });
-    if(r.ok){showAlert(`✓ Pushed ${S.rawRows.length} rows to ${cfg.repo}`,'ok','gh-al');updSyncUI(true);}
-    else{const e=await r.json();showAlert('GitHub: '+(e.message||r.status),'er','gh-al');}
-  }catch(e){showAlert('Error: '+e.message,'er','gh-al');}
-  btn.textContent='↑ Push';btn.disabled=false;
-}
-
-async function ghPull() {
-  const cfg=ghCfg();if(!cfg)return;
-  const btn=document.getElementById('pull-btn');btn.textContent='Pulling…';btn.disabled=true;
-  showAlert('Pulling from GitHub…','in','gh-al');
-  try{
-    const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/portfolio-data.json?ref=${cfg.br}`,
-      {headers:{Authorization:`token ${cfg.tok}`,Accept:'application/vnd.github+json'}});
-    if(!r.ok){showAlert('No portfolio-data.json found in repo.','er','gh-al');btn.textContent='↓ Pull';btn.disabled=false;return;}
-    const j=await r.json();
-    const decoded=decodeURIComponent(escape(atob(j.content)));
-    const d=JSON.parse(decoded);
-    S._rawCsvRows=d.csvRows||[];
-    S.rawRows=ENGINE.parseRows(S._rawCsvRows);
-    const{chains}=ENGINE.buildChains(S.rawRows);S.chains=chains;
-    if(d.theme)applyTheme(d.theme);
-    saveLocal();updUZ();renderAll();
-    showAlert(`✓ Pulled ${S.rawRows.length} rows, ${S.chains.length} chains from ${cfg.repo}`,'ok','gh-al');
-    updSyncUI(true);setTimeout(closeGH,1500);
-  }catch(e){showAlert('Error: '+e.message,'er','gh-al');}
-  btn.textContent='↓ Pull';btn.disabled=false;
-}
-
-function updSyncUI(synced=false) {
-  const dot=document.getElementById('sdot'),lbl=document.getElementById('slbl');
-  const cfg=JSON.parse(localStorage.getItem(LS_C)||'{}');
-  if(synced){dot.className='pdot';lbl.textContent='Synced · '+new Date().toLocaleTimeString();document.getElementById('synclbl').textContent=new Date().toLocaleString();}
-  else if(cfg.repo){dot.className='pdot a';lbl.textContent=cfg.repo;}
-  else{dot.className='pdot r';lbl.textContent='Not connected';}
-}
+// (GitHub sync removed — data is stored locally in IndexedDB. See STORAGE
+//  block above for IDB layer and EXPORT/IMPORT block for portable backups.)
 
 // ─────────────────────────────────────────────
 //  INIT
 // ─────────────────────────────────────────────
-// Boot is handled in the DOMContentLoaded handler above (deferred, with
-// progress messages). Nothing to do here.
+// Boot is handled in the DOMContentLoaded handler (deferred, with progress
+// messages). Nothing to do here.
 </script>
 </body>
 </html>
