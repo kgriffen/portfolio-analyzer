@@ -668,7 +668,10 @@ const buildChains = rows => {
     const ch = chains[chainId];
     if (!ch) return;
     ch.legs.push({ ...row, sqty });
-    ch.totalPnl += row.total;
+    // NOTE: totalPnl is NOT updated here. It's computed in the FINALIZE pass
+    // below, which uses average-cost-basis accounting for equities (so that
+    // equity opens don't show up as "losses" before the position is closed)
+    // and full Total for options/futures (already-realized cash).
   };
 
   // Process all Trade rows and Receive Deliver rows
@@ -693,6 +696,65 @@ const buildChains = rows => {
   // Sort orders chronologically by first row's date
   const sortedOrders = Object.values(orderMap)
     .sort((a, b) => a[0].date - b[0].date);
+
+  // ── PRE-PASS: ORPHAN TRADE-LIKE ROWS  ─────────────────────────────────────
+  // Some rows are "trade-like" (regular Buy/Sell/BTO/STC/etc.) but lack an
+  // Order #. Two known sources:
+  //   (a) Transfer rows: ACAT incoming positions (Sub Type='Transfer',
+  //       Type='Receive Deliver', Action='BUY_TO_OPEN', Total=$0).
+  //   (b) Receive Deliver Buy/Sell rows: certain equity buys (e.g. SPY 2022,
+  //       GDX/EL/MRNA/XLV in 2024) get exported with Type='Receive Deliver'
+  //       and no Order #. The matching closes generally HAVE an Order # and
+  //       run through the regular order loop.
+  //
+  // Both must be processed BEFORE the main order loop, otherwise their
+  // closing partners run first, find no open position, and start their own
+  // chains. The orphan rows then get pushed onto orphan-only chains and we
+  // get phantom shorts in the dashboard.
+  //
+  // Close-event rows (Expiration/Assignment/etc.) and any non-trade-like
+  // rows stay in orphanRows for the post-pass.
+  const tradeOpenActions = new Set(['BUY','BUY_TO_OPEN','SELL','SELL_TO_OPEN']);
+  const isTradeLikeOrphan = r =>
+    tradeOpenActions.has(r.action) ||
+    r.action === 'BUY_TO_CLOSE' || r.action === 'SELL_TO_CLOSE';
+
+  const prepassRows = [];
+  const remainingOrphans = [];
+  for (const r of orphanRows) {
+    if (isTradeLikeOrphan(r) && r.symbol) prepassRows.push(r);
+    else remainingOrphans.push(r);
+  }
+  orphanRows.length = 0;
+  orphanRows.push(...remainingOrphans);
+
+  for (const row of prepassRows.sort((a, b) => a.date - b.date)) {
+    const sym = row.symbol;
+    const sqty = signedQty(row.action, row.qty);
+    if (sqty === 0) continue;
+    if (symLedger[sym]) {
+      const ledger = symLedger[sym];
+      ledger.netQty += sqty;
+      attachRow(ledger.chainId, row, sqty);
+      if (Math.abs(ledger.netQty) < 1e-6) {
+        const ch = chains[ledger.chainId];
+        if (ch) delete ch.activeSymbols[sym];
+      }
+    } else {
+      const chainId = newChain(row.date, 0, [row]);
+      const ch = chains[chainId];
+      ch.openDate = row.date;
+      ch.underly = row.underly || sym;
+      ch.callPut = row.callPut;
+      ch.instrType = row.instrType;
+      symLedger[sym] = { netQty: sqty, chainId };
+      const ck = getChainKey(ch.underly, row.callPut);
+      activeChainKey[ck] = chainId;
+      attachRow(chainId, row, sqty);
+      const cs = ch.activeSymbols || (ch.activeSymbols = {});
+      cs[sym] = sqty;
+    }
+  }
 
   // ── PROCESS EACH ORDER ───────────────────────────────────────────────────
   for (const orderRows of sortedOrders) {
@@ -812,19 +874,10 @@ const buildChains = rows => {
         if (ch) delete ch.activeSymbols[sym];
       }
       // else: close event for something not in our dataset period — ignore
-    } else if (row.action === 'SELL') {
-      // Bare SELL (e.g., /CLX5 future) — treat as close or standalone
-      const sqty = signedQty(row.action, row.qty);
-      if (symLedger[sym]) {
-        const ledger = symLedger[sym];
-        ledger.netQty += sqty;
-        attachRow(ledger.chainId, row, sqty);
-      } else {
-        const chainId = newChain(row.date, 0, [row]);
-        symLedger[sym] = { netQty: sqty, chainId };
-        attachRow(chainId, row, sqty);
-      }
     }
+    // Trade-like orphan rows (Buy/Sell/BTO/STC etc.) are now handled in the
+    // pre-pass before the main order loop. Anything reaching here is either
+    // a close event (handled above) or a non-trade row we don't process.
   }
 
   // ── AUTO-CLOSE STALE EXPIRED LEGS ────────────────────────────────────────
@@ -914,6 +967,82 @@ const buildChains = rows => {
       const lastLeg = ch.legs.slice().sort((a, b) => b.date - a.date)[0];
       ch.closeDate = lastLeg ? lastLeg.date : null;
     }
+
+    // ── COMPUTE REALIZED P&L PER CHAIN ──────────────────────────────────
+    // Different rules per instrument type:
+    //   - Options & Futures: every Total is realized cash, sum directly.
+    //   - Equity: track a running average cost basis; book P&L only on the
+    //     realized portion at close. An open equity position has $0 realized
+    //     P&L until it's sold (cost outlay is capital, not loss).
+    //   - Dividends, Credit Interest, etc.: pure income, full P&L.
+    //   - Transfer rows: cost basis comes in via Average Price (no cash);
+    //     they extend the cost basis but produce no P&L themselves.
+    //
+    // Cost basis is tracked per-symbol within the chain (not per-chain), so
+    // a chain with multiple equity legs of different symbols (rare) still
+    // reconciles each one correctly.
+    let realized = 0;
+    const eqCost = {};  // sym -> { qty: shares held, cost: total cost paid }
+    const sortedLegs = [...ch.legs].sort((a, b) => a.date - b.date);
+
+    for (const l of sortedLegs) {
+      const isEquity = l.instrType === 'EQ';
+
+      if (!isEquity) {
+        // Options, futures, futures options — cash is realized at row time
+        realized += l.total;
+        continue;
+      }
+
+      // Equity branch
+      if (l.subType === 'Transfer') {
+        // Transferred-in position: extend cost basis using Average Price
+        // (which is the position's transferred total cost). No P&L impact.
+        const cb = eqCost[l.symbol] || { qty: 0, cost: 0 };
+        cb.qty += l.qty;
+        cb.cost += Math.abs(l.price); // Average Price as a dollar total here
+        eqCost[l.symbol] = cb;
+        continue;
+      }
+
+      if (l.subType === 'Dividend' || l.subType === 'Credit Interest' ||
+          l.subType === 'Debit Interest' || l.subType === 'Fully Paid Stock Lending Income' ||
+          l.subType === 'Balance Adjustment' || l.subType === 'Mark to Market') {
+        // Pure income/expense — no qty change, full P&L
+        realized += l.total;
+        continue;
+      }
+
+      // Regular equity Buy / Sell / Buy to Open / Sell to Close
+      const action = (l.action || '').toUpperCase();
+      const isBuy = action.includes('BUY');
+      const isSell = action.includes('SELL');
+
+      if (isBuy) {
+        // Increase position; total is negative (cash out)
+        const cb = eqCost[l.symbol] || { qty: 0, cost: 0 };
+        cb.qty += l.qty;
+        cb.cost += Math.abs(l.total);
+        eqCost[l.symbol] = cb;
+        // No P&L on a buy
+      } else if (isSell) {
+        // Decrease position; book P&L = proceeds - proportional cost basis
+        const cb = eqCost[l.symbol] || { qty: 0, cost: 0 };
+        const sellQty = Math.min(l.qty, cb.qty); // can't sell more than we hold
+        const avgCost = cb.qty > 0 ? cb.cost / cb.qty : 0;
+        const costSold = avgCost * sellQty;
+        const proceeds = Math.abs(l.total);
+        realized += proceeds - costSold;
+        cb.qty = Math.max(0, cb.qty - l.qty);
+        cb.cost = Math.max(0, cb.cost - costSold);
+        eqCost[l.symbol] = cb;
+      } else {
+        // Anything else — be conservative, sum the Total
+        realized += l.total;
+      }
+    }
+    ch.totalPnl = realized;
+    ch.eqCostBasis = eqCost; // exposed for debugging / cost-basis display
 
     // Opening legs = legs from the initial open order
     const openLegs = ch.legs.filter(l => isOpen(l.action));
