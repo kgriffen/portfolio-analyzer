@@ -490,6 +490,47 @@ const instrTag = code => {
   }
 };
 
+// ── FUTURES EXPIRY DECODER ───────────────────────────────────────────────────
+// CME contracts encode expiry month + year in the symbol suffix:
+//   /MESH5  →  /MES + H + 5  →  March 2025
+//   /CLX25  →  /CL  + X + 25 →  November 2025  (some brokers use 2-digit year)
+// Year digit is ambiguous (5 = 2025 or 2035?). We pick the year closest to
+// today within ±2 years, matching how a trader actually thinks about it.
+// Returns a Date for the contract month (15th of the month, mid-month) or null
+// if the symbol doesn't match the expected futures shape.
+const FUT_MONTH_CODE = {
+  F: 0, G: 1, H: 2, J: 3, K: 4, M: 5,
+  N: 6, Q: 7, U: 8, V: 9, X: 10, Z: 11
+};
+
+const decodeFuturesExpiry = sym => {
+  if (!sym || !sym.startsWith('/')) return null;
+  // First token only (futures-options have a second token after the space)
+  const root = sym.split(/\s+/)[0];
+  // Match: /<root letters><month code><1-2 year digits>
+  const m = /^\/([A-Z]{1,4})([FGHJKMNQUVXZ])(\d{1,2})$/.exec(root);
+  if (!m) return null;
+  const [, , monthCode, yrStr] = m;
+  const month = FUT_MONTH_CODE[monthCode];
+  if (month === undefined) return null;
+  const yr = parseInt(yrStr, 10);
+  // Resolve year: pick decade closest to today
+  const today = new Date();
+  const thisYr = today.getFullYear();
+  let candidates;
+  if (yrStr.length === 1) {
+    // single digit: try current decade ± neighbors
+    const baseDecade = Math.floor(thisYr / 10) * 10;
+    candidates = [baseDecade - 10 + yr, baseDecade + yr, baseDecade + 10 + yr];
+  } else {
+    // 2-digit: assume 2000s
+    candidates = [2000 + yr];
+  }
+  // Pick the candidate closest to thisYr (futures don't trade more than a few years out)
+  candidates.sort((a, b) => Math.abs(a - thisYr) - Math.abs(b - thisYr));
+  return new Date(candidates[0], month, 15);
+};
+
 // ── STRATEGY CLASSIFICATION ──────────────────────────────────────────────────
 // Called on the opening legs of a chain (the initial Order # rows).
 const classifyStrategy = (legs, instrCode) => {
@@ -742,31 +783,38 @@ const buildChains = rows => {
     }
   }
 
-  // ── PROCESS ORPHAN ROWS (expirations, assignments, bare SELL) ────────────
+  // ── PROCESS ORPHAN ROWS (expirations, assignments, exercises, bare SELL) ──
+  // Close events come from `Receive Deliver` rows which often have a blank Action
+  // field (assignments/cash-settled assignments) or a confusing one. We do NOT
+  // trust the row's signed quantity for these — we close by whatever the leg's
+  // current netQty is, and let the row's Total flow into chain P&L. This also
+  // makes duplicate Assignment + Cash Settled Assignment row pairs safe: the
+  // first zeros the ledger, the second contributes only its Total.
+  const closeEventSubTypes = new Set([
+    'Expiration', 'Assignment', 'Cash Settled Assignment',
+    'Exercise', 'Cash Settled Exercise'
+  ]);
+
   for (const row of orphanRows.sort((a, b) => a.date - b.date)) {
     const sym = row.symbol;
-    const sqty = signedQty(row.action, row.qty);
 
-    if (row.subType === 'Expiration' || row.subType === 'Assignment' || row.subType === 'Cash Settled Assignment') {
+    if (closeEventSubTypes.has(row.subType)) {
       if (symLedger[sym]) {
         const ledger = symLedger[sym];
-        // Force close: whatever the expiration/assignment gives us
-        ledger.netQty += sqty; // usually brings to 0
-        attachRow(ledger.chainId, row, sqty);
+        // Close by current netQty — flatten regardless of what Action says.
+        // This handles: blank Action on Assignment rows, Tastytrade qty quirks,
+        // and the duplicate-row pair (second row finds netQty==0, no-ops).
+        const closeQty = -ledger.netQty;
+        ledger.netQty = 0;
+        attachRow(ledger.chainId, row, closeQty);
 
-        // If cash settled assignment, that Total is the settlement P&L
-        // Already handled by attachRow(total) above
-
-        if (Math.abs(ledger.netQty) < 1e-6) {
-          const ch = chains[ledger.chainId];
-          if (ch) {
-            delete ch.activeSymbols[sym];
-          }
-        }
+        const ch = chains[ledger.chainId];
+        if (ch) delete ch.activeSymbols[sym];
       }
-      // else: expiration for something not in our dataset period — ignore
+      // else: close event for something not in our dataset period — ignore
     } else if (row.action === 'SELL') {
       // Bare SELL (e.g., /CLX5 future) — treat as close or standalone
+      const sqty = signedQty(row.action, row.qty);
       if (symLedger[sym]) {
         const ledger = symLedger[sym];
         ledger.netQty += sqty;
@@ -777,6 +825,80 @@ const buildChains = rows => {
         attachRow(chainId, row, sqty);
       }
     }
+  }
+
+  // ── AUTO-CLOSE STALE EXPIRED LEGS ────────────────────────────────────────
+  // Tastytrade's CSV export sometimes drops the Expiration row entirely for
+  // options that expired worthless, and futures don't carry an Expiration Date
+  // column at all (their expiry is encoded in the symbol). Without help, those
+  // legs sit in the ledger forever as false-positive opens.
+  //
+  // For each leg with a non-zero ledger and a past expiration:
+  //   - Options:  use the leg's `expiry` field (Expiration Date column)
+  //   - Futures:  decode from the symbol's CME month code
+  //   - Equities: never auto-close (real holdings)
+  //
+  // We synthesize a close-event row at the contract's expiry date with $0
+  // Total. The premium already flowed into the chain when the leg opened, so
+  // setting Total=0 leaves the chain P&L correct: shorts keep the credit
+  // received, longs eat the debit paid. Mark these clearly so they're auditable.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  let _syntheticCount = 0;
+
+  for (const sym of Object.keys(symLedger)) {
+    const ledger = symLedger[sym];
+    if (Math.abs(ledger.netQty) < 1e-6) continue;
+
+    // Use the most recent leg in this chain matching this symbol to get expiry/instr info
+    const ch = chains[ledger.chainId];
+    if (!ch) continue;
+    const symLegs = ch.legs.filter(l => l.symbol === sym);
+    if (!symLegs.length) continue;
+    const sample = symLegs[symLegs.length - 1];
+
+    // Determine expiry date
+    let expDate = null;
+    if (sample.instrType === 'EQ_OPT' || sample.instrType === 'FUT_OPT') {
+      if (sample.expiry) {
+        const d = new Date(sample.expiry);
+        if (!isNaN(d)) expDate = d;
+      }
+    } else if (sample.instrType === 'FUT') {
+      expDate = decodeFuturesExpiry(sym);
+    }
+    // Skip equities and anything we can't date
+    if (!expDate) continue;
+    if (expDate >= todayStart) continue;  // not yet expired
+
+    // Synthesize the close
+    const closeQty = -ledger.netQty;
+    const synthRow = {
+      date: expDate,
+      type: 'Receive Deliver',
+      subType: 'Expiration (synthetic)',
+      action: closeQty > 0 ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE',
+      symbol: sym,
+      instrType: sample.instrType,
+      desc: `Auto-closed at expiry — original CSV missing close event`,
+      value: 0, qty: Math.abs(closeQty), price: 0, comm: 0, fees: 0,
+      total: 0, mult: sample.mult || 1,
+      root: sample.root || '',
+      underly: sample.underly || '',
+      expiry: sample.expiry || '',
+      strike: sample.strike || 0,
+      callPut: sample.callPut || '',
+      orderNum: 0,
+      _synthetic: true,
+    };
+    ledger.netQty = 0;
+    attachRow(ledger.chainId, synthRow, closeQty);
+    delete ch.activeSymbols[sym];
+    _syntheticCount++;
+  }
+  if (_syntheticCount > 0) {
+    // Surfaced via console; the dashboard will count synthetic legs separately
+    console.info(`buildChains: auto-closed ${_syntheticCount} stale legs (missing CSV expiration rows)`);
   }
 
   // ── FINALIZE CHAINS ──────────────────────────────────────────────────────
@@ -835,7 +957,7 @@ const buildChains = rows => {
     }
   }
 
-  return { chains: Object.values(chains), symLedger };
+  return { chains: Object.values(chains), symLedger, syntheticCount: _syntheticCount };
 };
 
 // ── METRICS ──────────────────────────────────────────────────────────────────
