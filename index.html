@@ -1375,6 +1375,13 @@ window.addEventListener('DOMContentLoaded', () => {
         await yieldUI();
       }
 
+      // One-time rekey to positional keys (fixes duplicate-fill collisions)
+      const rk = await rekeyIdbIfNeeded();
+      if (rk.rekeyed > 0) {
+        setMsg(`Re-indexed ${rk.rekeyed.toLocaleString()} stored rows…`);
+        await yieldUI();
+      }
+
       const count = await idbCount();
       if (!count) {
         // No data — show empty state and dismiss
@@ -1445,23 +1452,48 @@ function handleFiles(files) {
   });
 }
 
-function rowKey(r) {
-  // Deduplicate using date + symbol + action + value
+function rowKey(r, occ = 0) {
+  // Deduplicate using date + symbol + action + value, plus an occurrence
+  // counter to handle Tastytrade's same-millisecond duplicate-fill rows
+  // (e.g. PURR 1/15/2026: two identical BTO 500 rows representing two fills
+  // of one 1000-share order). The CSV provides no field to distinguish them,
+  // so we count occurrences within an upload. Order is stable across exports
+  // — Tastytrade always emits identical rows in the same sequence — so the
+  // Nth occurrence in one export reliably matches the Nth in the next.
   const d = (r['Date']||'').slice(0,19);
   const sym = (r['Symbol']||'').trim();
   const act = (r['Action']||r['Sub Type']||'').trim();
   const val = (r['Total']||r['Value']||'').toString().replace(/[$,\s]/g,'');
-  return `${d}|${sym}|${act}|${val}`;
+  return `${d}|${sym}|${act}|${val}#${occ}`;
+}
+
+// Group rows by their base content key and assign occurrence indices.
+// Returns array parallel to input with same order, each element { row, key }.
+function rowsWithKeys(csvRows) {
+  const counters = {};
+  return csvRows.map(r => {
+    const base = rowKey(r, 0).slice(0, -2); // strip the "#0" suffix
+    counters[base] = (counters[base] || 0);
+    const k = `${base}#${counters[base]}`;
+    counters[base]++;
+    return { row: r, key: k };
+  });
 }
 
 function ingest(csvRows) {
-  const existingKeys = new Set(S._rawCsvRows ? S._rawCsvRows.map(rowKey) : []);
-  const newRows = csvRows.filter(r => {
-    const k = rowKey(r);
-    if (existingKeys.has(k)) return false;
-    existingKeys.add(k);
-    return true;
-  });
+  // Compute positional keys for the existing rows AND the incoming rows. We
+  // dedup on the positional key so genuine duplicate-fill rows (same key
+  // before suffix, different occurrence index) are kept distinct.
+  const existingKeys = new Set(
+    rowsWithKeys(S._rawCsvRows || []).map(x => x.key)
+  );
+  const incoming = rowsWithKeys(csvRows);
+  const newRows = [];
+  for (const { row, key } of incoming) {
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    newRows.push(row);
+  }
 
   if (!newRows.length && csvRows.length > 0) {
     showAlert('All rows already loaded — no new transactions found.', 'wa');
@@ -1519,16 +1551,16 @@ function db() {
   return _dbPromise;
 }
 
-async function idbBulkPut(rows) {
+async function idbBulkPut(rows, keys = null) {
   if (!rows.length) return 0;
   const d = await db();
   return new Promise((resolve, reject) => {
     const tx = d.transaction(IDB_STORE, 'readwrite');
     const store = tx.objectStore(IDB_STORE);
     let written = 0;
-    for (const r of rows) {
-      const k = rowKey(r);
-      store.put(r, k);
+    for (let i = 0; i < rows.length; i++) {
+      const k = keys ? keys[i] : rowKey(rows[i]);
+      store.put(rows[i], k);
       written++;
     }
     tx.oncomplete = () => resolve(written);
@@ -1582,7 +1614,11 @@ async function migrateFromLocalStorageIfNeeded() {
   try {
     const d = JSON.parse(raw);
     const rows = d.csvRows || [];
-    if (rows.length) await idbBulkPut(rows);
+    if (rows.length) {
+      // Use positional keys from the start
+      const keyed = rowsWithKeys(rows);
+      await idbBulkPut(keyed.map(x => x.row), keyed.map(x => x.key));
+    }
     localStorage.removeItem(LS_D);
     localStorage.setItem(LS_MIGRATED, '1');
     return { migrated: rows.length, skipped: false };
@@ -1592,10 +1628,65 @@ async function migrateFromLocalStorageIfNeeded() {
   }
 }
 
+// One-time rekey: existing IDB stores rows under non-positional keys
+// (date|sym|act|val with no "#N" suffix). After fixing the duplicate-fill
+// dedup bug, all keys must be positional (...#N). This migration walks the
+// store, drops every entry whose key lacks a "#" suffix, and re-inserts the
+// rows under fresh positional keys. Idempotent: once everything has a "#",
+// it returns immediately.
+const LS_REKEYED = 'ptfol_idb_rekeyed_v1';
+async function rekeyIdbIfNeeded() {
+  if (localStorage.getItem(LS_REKEYED) === '1') return { rekeyed: 0, skipped: true };
+  const d = await db();
+  // Read every (key, value) pair
+  const all = await new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readonly');
+    const store = tx.objectStore(IDB_STORE);
+    const out = [];
+    const req = store.openCursor();
+    req.onsuccess = e => {
+      const cur = e.target.result;
+      if (cur) { out.push({ key: cur.key, value: cur.value }); cur.continue(); }
+      else resolve(out);
+    };
+    req.onerror = () => reject(req.error);
+  });
+  // Anything already positional? Skip if all keys have "#"
+  const needsRekey = all.some(({ key }) => typeof key === 'string' && !key.includes('#'));
+  if (!needsRekey) {
+    localStorage.setItem(LS_REKEYED, '1');
+    return { rekeyed: 0, skipped: true };
+  }
+  // Sort by date so positional indices are assigned in chronological order,
+  // matching how a fresh ingest would assign them.
+  all.sort((a, b) => {
+    const da = (a.value['Date'] || '').slice(0, 19);
+    const db_ = (b.value['Date'] || '').slice(0, 19);
+    return da < db_ ? -1 : da > db_ ? 1 : 0;
+  });
+  const rows = all.map(x => x.value);
+  const keyed = rowsWithKeys(rows);
+  // Wipe the store and re-insert with positional keys
+  await idbClear();
+  await idbBulkPut(keyed.map(x => x.row), keyed.map(x => x.key));
+  localStorage.setItem(LS_REKEYED, '1');
+  return { rekeyed: rows.length, skipped: false };
+}
+
 // Save: append new rows to IDB. Called after every successful ingest.
 async function saveRows(rows) {
   try {
-    await idbBulkPut(rows);
+    // Compute positional keys against the FULL merged dataset so that the
+    // Nth identical-content fill gets occurrence index N regardless of
+    // whether earlier identical rows are also in the new-rows batch.
+    // Example: if S._rawCsvRows already has the first PURR fill (key #0)
+    // and rows is [second PURR fill], the second fill's key is #1.
+    const allKeysByRow = new Map();
+    rowsWithKeys(S._rawCsvRows || []).forEach(({ row, key }) => {
+      allKeysByRow.set(row, key);
+    });
+    const keys = rows.map(r => allKeysByRow.get(r) || rowKey(r));
+    await idbBulkPut(rows, keys);
     document.getElementById('synclbl').textContent = 'Saved ' + new Date().toLocaleTimeString();
   } catch(e) {
     console.error('saveRows error', e);
