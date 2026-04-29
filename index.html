@@ -239,7 +239,7 @@ tbody tr:hover td{background:var(--bg3);}
     <div class="uzi" id="uzi">📊</div>
     <div class="uztxt">
       <div class="uzt" id="uzt">Drop Tastytrade CSV or click to upload</div>
-      <div class="uzs" id="uzs">Equities · Options · Futures · Futures Options — all instrument types supported</div>
+      <div class="uzs" id="uzs">Equity Options · Futures Options · Futures — equities and money movement filtered out</div>
     </div>
   </div>
 
@@ -250,7 +250,7 @@ tbody tr:hover td{background:var(--bg3);}
     <div class="si"><span class="sl2">DATE RANGE</span><span class="sv" id="s-rng">—</span></div>
     <div class="si"><span class="sl2">CHAINS</span><span class="sv" id="s-ch">0</span></div>
     <div class="si"><span class="sl2">OPEN POSITIONS</span><span class="sv" id="s-op">0</span></div>
-    <div class="si"><span class="sl2">ACCOUNT FUNDED</span><span class="sv" id="s-dep">—</span></div>
+    <div class="si"><span class="sl2">REALIZED P&amp;L</span><span class="sv" id="s-dep">—</span></div>
     <div class="si"><button class="btn btn-sm" style="color:var(--rd)" onclick="clearAll()">✕ Clear</button></div>
   </div>
 
@@ -369,14 +369,12 @@ tbody tr:hover td{background:var(--bg3);}
               <option value="">All Types</option>
               <option>Trade</option>
               <option>Receive Deliver</option>
-              <option>Money Movement</option>
             </select>
             <select class="fsel" id="f-inst" onchange="filterTx()">
               <option value="">All Instruments</option>
               <option value="EQ_OPT">EQ Option</option>
               <option value="FUT_OPT">Fut Option</option>
               <option value="FUT">Future</option>
-              <option value="EQ">Equity</option>
             </select>
           </div>
         </div>
@@ -1207,14 +1205,29 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
   const dStd  = dRets.length > 1 ? Math.sqrt(dRets.reduce((s, r) => s + r * r, 0) / dRets.length) : 1;
   const sortino = dStd > 0 ? (mu / dStd) * Math.sqrt(252) : 0;
 
-  // Drawdown
-  let peak = 0, maxDD = 0;
+  // Drawdown — dollar terms (peak-to-trough on cumulative realized P&L).
+  // We keep both: maxDDPct (for legacy) and maxDD ($) for display.
+  let peakD = 0, maxDD = 0, maxDDPct = 0;
   const ddSeries = dailySeries.map(d => {
-    if (d.cum > peak) peak = d.cum;
-    const dd = peak > 0 ? (peak - d.cum) / peak : 0;
-    if (dd > maxDD) maxDD = dd;
-    return { date: d.date, dd };
+    if (d.cum > peakD) peakD = d.cum;
+    const ddDollar = peakD - d.cum;
+    if (ddDollar > maxDD) maxDD = ddDollar;
+    const ddPct = peakD > 0 ? ddDollar / peakD : 0;
+    if (ddPct > maxDDPct) maxDDPct = ddPct;
+    return { date: d.date, dd: ddPct };
   });
+
+  // Days held — average and median across closed chains in period
+  const heldDays = closed
+    .map(c => c.daysHeld || 0)
+    .filter(d => d > 0)
+    .sort((a, b) => a - b);
+  const avgDaysHeld = heldDays.length
+    ? heldDays.reduce((s, x) => s + x, 0) / heldDays.length
+    : null;
+  const medianDaysHeld = heldDays.length
+    ? heldDays[Math.floor(heldDays.length / 2)]
+    : null;
 
   // Starting equity: use the Transfer row (true account funding)
   const allDeposits = allRows
@@ -1276,9 +1289,10 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
 
   return {
     periodPnl, totalFees, dividends,
-    cagr, sharpe, sortino, maxDD, mar, irr,
+    cagr, sharpe, sortino, maxDD, maxDDPct, mar, irr,
     winRate, avgWin, avgLoss, profFac,
     wins: wins.length, losses: losses.length, tradeable: tradeable.length,
+    avgDaysHeld, medianDaysHeld,
     closed, open, dailySeries, ddSeries, returns, n, yrs,
     startEquity, endEquity, stratMap,
     allClosed: chains.filter(c => c.status === 'closed'),
@@ -1382,6 +1396,13 @@ window.addEventListener('DOMContentLoaded', () => {
         await yieldUI();
       }
 
+      // One-time purge of non-options rows (equities, fixed income, money mvmt)
+      const pg = await purgeNonOptionsIfNeeded();
+      if (pg.purged > 0) {
+        setMsg(`Removed ${pg.purged.toLocaleString()} non-trading rows…`);
+        await yieldUI();
+      }
+
       const count = await idbCount();
       if (!count) {
         // No data — show empty state and dismiss
@@ -1452,6 +1473,57 @@ function handleFiles(files) {
   });
 }
 
+// ─────────────────────────────────────────────
+//  ROW FILTER  (options/futures-only mode)
+// ─────────────────────────────────────────────
+//  This app focuses on options performance measurement. We drop everything
+//  else at ingest so the IDB stays small and the dashboard never has to
+//  reason about cost-basis-tracked equities or income-statement lines.
+//
+//  KEEP:
+//    - Trade rows on Equity Option, Future Option, Future
+//    - Receive Deliver close-events (Expiration, Assignment, Cash Settled
+//      Assignment, Exercise, Cash Settled Exercise) — these resolve open
+//      option positions even when they reference equity symbols
+//
+//  DROP:
+//    - Anything Equity-typed (your stock holdings)
+//    - Anything Fixed Income (T-bills used as cash parking)
+//    - All Money Movement rows (deposits, withdrawals, dividends, interest,
+//      fees, balance adjustments) — these track account flows, not trading
+//
+//  Note on stock assignments: when a short put assigns into shares, you'll
+//  see an Assignment row on the option (we keep it) and an equity row for
+//  the share receipt (we drop it). The option's chain still closes correctly.
+//  If you later sell those shares, that activity won't appear in this app.
+const KEEP_INSTRUMENT_TYPES = new Set(['Equity Option', 'Future Option', 'Future']);
+const KEEP_RECEIVE_DELIVER_SUBTYPES = new Set([
+  'Expiration', 'Assignment', 'Cash Settled Assignment',
+  'Exercise', 'Cash Settled Exercise'
+]);
+
+function shouldKeepRow(r) {
+  const type = (r['Type'] || '').trim();
+  const subType = (r['Sub Type'] || '').trim();
+  const instrType = (r['Instrument Type'] || '').trim();
+
+  // Drop all account-level money movement (deposits, dividends, interest, etc.)
+  if (type === 'Money Movement') return false;
+
+  // Keep Receive Deliver only if it's an option close-event
+  if (type === 'Receive Deliver') {
+    return KEEP_RECEIVE_DELIVER_SUBTYPES.has(subType);
+  }
+
+  // For Trade rows, keep only options/futures
+  if (type === 'Trade') {
+    return KEEP_INSTRUMENT_TYPES.has(instrType);
+  }
+
+  // Anything else — drop
+  return false;
+}
+
 function rowKey(r, occ = 0) {
   // Deduplicate using date + symbol + action + value, plus an occurrence
   // counter to handle Tastytrade's same-millisecond duplicate-fill rows
@@ -1481,13 +1553,19 @@ function rowsWithKeys(csvRows) {
 }
 
 function ingest(csvRows) {
+  // Filter to options/futures only. Anything equity, fixed income, dividends,
+  // interest, deposits, etc. is dropped before it enters the database.
+  const totalIncoming = csvRows.length;
+  const filteredRows = csvRows.filter(shouldKeepRow);
+  const droppedByFilter = totalIncoming - filteredRows.length;
+
   // Compute positional keys for the existing rows AND the incoming rows. We
   // dedup on the positional key so genuine duplicate-fill rows (same key
   // before suffix, different occurrence index) are kept distinct.
   const existingKeys = new Set(
     rowsWithKeys(S._rawCsvRows || []).map(x => x.key)
   );
-  const incoming = rowsWithKeys(csvRows);
+  const incoming = rowsWithKeys(filteredRows);
   const newRows = [];
   for (const { row, key } of incoming) {
     if (existingKeys.has(key)) continue;
@@ -1495,15 +1573,18 @@ function ingest(csvRows) {
     newRows.push(row);
   }
 
-  if (!newRows.length && csvRows.length > 0) {
-    showAlert('All rows already loaded — no new transactions found.', 'wa');
+  if (!newRows.length && totalIncoming > 0) {
+    const msg = droppedByFilter > 0
+      ? `All matching rows already loaded — no new options/futures activity. (${droppedByFilter.toLocaleString()} non-trading rows skipped.)`
+      : 'All rows already loaded — no new transactions found.';
+    showAlert(msg, 'wa');
     return;
   }
 
   // Merge raw CSV rows for dedup tracking
   S._rawCsvRows = [...(S._rawCsvRows||[]), ...newRows];
-  const totalParsed = csvRows.length;
   const added = newRows.length;
+  const dupes = filteredRows.length - added;
 
   // Re-parse everything from merged CSV rows
   S.rawRows = ENGINE.parseRows(S._rawCsvRows);
@@ -1512,7 +1593,10 @@ function ingest(csvRows) {
   const { chains } = ENGINE.buildChains(S.rawRows);
   S.chains = chains;
 
-  showAlert(`Loaded ${totalParsed} rows — ${added} new, ${totalParsed-added} duplicates skipped. Built ${chains.length} chains.`, 'ok');
+  const parts = [`${added.toLocaleString()} new`];
+  if (dupes > 0) parts.push(`${dupes.toLocaleString()} duplicate`);
+  if (droppedByFilter > 0) parts.push(`${droppedByFilter.toLocaleString()} non-trading filtered out`);
+  showAlert(`Loaded ${totalIncoming.toLocaleString()} rows — ${parts.join(', ')}. Built ${chains.length.toLocaleString()} chains.`, 'ok');
   updUZ();
   // Persist only the *new* rows to IDB (append-only, not a full re-dump)
   saveRows(newRows);
@@ -1613,7 +1697,7 @@ async function migrateFromLocalStorageIfNeeded() {
   }
   try {
     const d = JSON.parse(raw);
-    const rows = d.csvRows || [];
+    const rows = (d.csvRows || []).filter(shouldKeepRow);
     if (rows.length) {
       // Use positional keys from the start
       const keyed = rowsWithKeys(rows);
@@ -1673,6 +1757,43 @@ async function rekeyIdbIfNeeded() {
   return { rekeyed: rows.length, skipped: false };
 }
 
+// One-time purge: drop equity, fixed-income, and money-movement rows from
+// IDB. After switching the app to options-only mode, existing databases
+// from earlier versions still contain ~1100+ equity rows, all the dividends,
+// deposits, etc. This walks the store and deletes anything that fails
+// shouldKeepRow(). Idempotent: flagged via LS_OPT_ONLY.
+const LS_OPT_ONLY = 'ptfol_options_only_purge_v1';
+async function purgeNonOptionsIfNeeded() {
+  if (localStorage.getItem(LS_OPT_ONLY) === '1') return { purged: 0, skipped: true };
+  const d = await db();
+  const toDelete = [];
+  await new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).openCursor();
+    req.onsuccess = e => {
+      const cur = e.target.result;
+      if (cur) {
+        if (!shouldKeepRow(cur.value)) toDelete.push(cur.key);
+        cur.continue();
+      } else resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
+  if (!toDelete.length) {
+    localStorage.setItem(LS_OPT_ONLY, '1');
+    return { purged: 0, skipped: true };
+  }
+  await new Promise((resolve, reject) => {
+    const tx = d.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    for (const k of toDelete) store.delete(k);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  localStorage.setItem(LS_OPT_ONLY, '1');
+  return { purged: toDelete.length, skipped: false };
+}
+
 // Save: append new rows to IDB. Called after every successful ingest.
 async function saveRows(rows) {
   try {
@@ -1718,7 +1839,7 @@ async function clearAll() {
   hideDash();
   document.getElementById('uzi').textContent = '📊';
   document.getElementById('uzt').textContent = 'Drop Tastytrade CSV or click to upload';
-  document.getElementById('uzs').textContent = 'Equities · Options · Futures · Futures Options — all instrument types supported';
+  document.getElementById('uzs').textContent = 'Equity Options · Futures Options · Futures — equities and money movement filtered out';
   document.getElementById('synclbl').textContent = '';
   showAlert('Local data cleared.', 'in');
 }
@@ -1841,9 +1962,15 @@ function renderAll() {
   const openChains = S.chains.filter(c=>c.status==='open');
   document.getElementById('s-op').textContent   = openChains.length;
 
-  const deposit = S.rawRows.filter(r=>r.type==='Money Movement'&&(r.subType==='Transfer'||r.subType==='Deposit')&&r.total>0)
-                             .reduce((s,r)=>s+r.total,0);
-  document.getElementById('s-dep').textContent  = '$'+deposit.toLocaleString(undefined,{maximumFractionDigits:0});
+  // Realized P&L = sum of P&L across all closed chains (lifetime, all-period).
+  // Money Movement rows are no longer in the dataset, so the old deposit-sum
+  // approach doesn't apply. This is a more meaningful number for tracking
+  // pure trading performance anyway.
+  const realized = S.chains.filter(c => c.status === 'closed')
+                            .reduce((s, c) => s + c.totalPnl, 0);
+  const realizedStr = (realized >= 0 ? '$' : '-$') +
+                       Math.abs(realized).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  document.getElementById('s-dep').textContent  = realizedStr;
 
   const [pStart, pEnd] = getRange();
   const M = ENGINE.computeMetrics(S.chains, S.rawRows, pStart, pEnd);
@@ -1876,25 +2003,36 @@ const fR = n => {
 //  KPIs
 // ─────────────────────────────────────────────
 function renderKPIs(M) {
+  // Options-trading focus. CAGR/IRR are dropped because they require a
+  // known capital base (deposits/transfers), which we no longer track.
+  // Replaced with metrics that make sense for trade-by-trade evaluation.
+  const avgPnl = M.tradeable > 0 ? M.periodPnl / M.tradeable : 0;
+  const expectancy = (M.winRate * M.avgWin) + ((1 - M.winRate) * M.avgLoss);
   const K = [
     { lb:'Total P&L', bar:'gn', v:fDollar(M.periodPnl), cl:M.periodPnl>=0?'pos':'neg',
-      s:`${M.tradeable} closed trades`, tip:'Net profit/loss on ALL transactions (trades + assignments + expirations) using the Total field which includes commissions and fees.' },
-    { lb:'CAGR', bar:'bl', v:fPct(M.cagr), cl:M.cagr>=.1?'pos':M.cagr<0?'neg':'warn',
-      s:`${M.yrs.toFixed(1)}yr vs $${(M.startEquity/1000).toFixed(0)}k funded`,
-      tip:'Compound Annual Growth Rate based on account transfer/deposit history as the starting equity base.' },
+      s:`${M.tradeable} closed trades`,
+      tip:'Net realized profit/loss in the selected period across all closed option chains (rolls collapsed into one trade). Includes commissions and exchange fees.' },
+    { lb:'Win Rate', bar:M.winRate>=.5?'gn':'am', v:fPct(M.winRate,0), cl:M.winRate>=.7?'pos':M.winRate>=.5?'warn':'neg',
+      s:`${M.wins}W / ${M.losses}L`,
+      tip:'% of closed chains with positive total P&L. Short premium strategies typically run >70%; directional trades run lower.' },
+    { lb:'Profit Factor', bar:M.profFac>=1.5?'gn':M.profFac<1?'rd':'am', v:fR(M.profFac), cl:M.profFac>=1.5?'pos':M.profFac<1?'neg':'warn',
+      s:`Avg W: ${fDollar(M.avgWin)} / L: ${fDollar(M.avgLoss)}`,
+      tip:'Gross winning P&L ÷ gross losing P&L. >1 = profitable, >1.5 = healthy, >2 = strong.' },
+    { lb:'Expectancy', bar:expectancy>=0?'gn':'rd', v:fDollar(expectancy), cl:expectancy>=0?'pos':'neg',
+      s:`Avg P&L: ${fDollar(avgPnl)}`,
+      tip:'Expected $ outcome per trade given your historical win rate and avg win/loss sizes. Compares to the actual average P&L per trade.' },
     { lb:'Sharpe', bar:M.sharpe>=1?'gn':M.sharpe<0?'rd':'am', v:fR(M.sharpe), cl:M.sharpe>=1?'pos':M.sharpe<0?'neg':'warn',
       s:`Sortino: ${fR(M.sortino)}`,
-      tip:'Annualized Sharpe ratio (0% risk-free rate). >1 = good, >2 = excellent. Sortino only penalizes downside deviation.' },
-    { lb:'Max Drawdown', bar:M.maxDD<.1?'gn':M.maxDD<.25?'am':'rd', v:fPct(-M.maxDD), cl:M.maxDD<.1?'pos':M.maxDD<.25?'warn':'neg',
-      s:`MAR: ${fR(M.mar)}`, tip:'Largest peak-to-trough decline in cumulative P&L. MAR = CAGR ÷ Max Drawdown.' },
-    { lb:'IRR', bar:'te', v:fPct(M.irr), cl:M.irr>=0?'pos':'neg',
-      s:'vs deposits/transfers', tip:'Internal Rate of Return accounting for the timing of all deposits and withdrawals.' },
-    { lb:'Win Rate', bar:M.winRate>=.5?'gn':'am', v:fPct(M.winRate,0), cl:M.winRate>=.5?'pos':'warn',
-      s:`${M.wins}W / ${M.losses}L`, tip:'% of closed chains (trades) with positive total P&L. Each chain = one logical trade including all rolls.' },
-    { lb:'Profit Factor', bar:M.profFac>=1.5?'gn':M.profFac<1?'rd':'am', v:fR(M.profFac), cl:M.profFac>=1.5?'pos':M.profFac<1?'neg':'warn',
-      s:`Avg W: ${fDollar(M.avgWin)} / L: ${fDollar(M.avgLoss)}`, tip:'Gross profit ÷ gross loss. >1.5 is healthy.' },
+      tip:'Annualized Sharpe ratio of daily realized P&L (0% risk-free). >1 = good, >2 = excellent. Sortino only penalizes downside.' },
+    { lb:'Max Drawdown', bar:M.maxDD<5000?'gn':M.maxDD<25000?'am':'rd', v:fDollar(-M.maxDD), cl:M.maxDD<5000?'pos':'warn',
+      s:`Period: ${M.yrs.toFixed(1)}yr`,
+      tip:'Largest peak-to-trough drop in cumulative P&L during the period. Shown as a $ amount (no equity base to express as %).' },
+    { lb:'Avg Days Held', bar:'bl', v:M.avgDaysHeld!=null?M.avgDaysHeld.toFixed(0)+'d':'—', cl:'neu',
+      s:`Median: ${M.medianDaysHeld!=null?M.medianDaysHeld.toFixed(0)+'d':'—'}`,
+      tip:'Average days from open to close across closed chains. Includes rolls (days from initial open to final close).' },
     { lb:'Fees + Comm', bar:'co', v:fDollar(M.totalFees), cl:'neu',
-      s:`Dividends: ${fDollar(M.dividends)}`, tip:'Total commissions and exchange fees in the period. Dividends shown below.' },
+      s:`${M.tradeable>0?fDollar(M.totalFees/M.tradeable)+'/trade':'—'}`,
+      tip:'Total commissions and exchange fees in the period.' },
   ];
   document.getElementById('kg').innerHTML = K.map(k=>`
     <div class="kpi">
