@@ -134,19 +134,27 @@ input[type="file"]{display:none;}
 .cal-mtotal{font-family:var(--fd);font-size:13px;font-weight:600;}
 .cal-mtotal.cp2{color:var(--gn);}
 .cal-mtotal.cn{color:var(--rd);}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+/* 8 columns: 7 days + 1 week-total; week-total slightly wider */
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr) 1.15fr;gap:2px;}
 .cal-dh{font-family:var(--fm);font-size:8px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;text-align:left;padding:6px 4px 4px;}
 .cal-cell{position:relative;min-height:62px;padding:5px 7px;border-radius:3px;display:flex;flex-direction:column;justify-content:flex-start;background:var(--bg1);transition:background .12s;}
 .cal-cell.cal-empty{background:transparent;min-height:62px;}
 .cal-day{font-family:var(--fm);font-size:9px;color:var(--t3);font-weight:500;}
 .cal-val{font-family:var(--fd);font-size:12px;font-weight:600;margin-top:auto;}
 .cal-cnt{font-family:var(--fm);font-size:9px;color:var(--t3);margin-top:1px;}
-/* Mini variant — half height + smaller text */
-.cal-month-compact .cal-cell{min-height:42px;padding:3px 5px;}
-.cal-month-compact .cal-cell.cal-empty{min-height:42px;}
-.cal-month-compact .cal-val{font-size:10px;}
-.cal-month-compact .cal-day{font-size:8px;}
-.cal-month-compact .cal-dh{font-size:7px;padding:4px 3px 3px;}
+/* Week-total column: neutral background, no day number, just value + count */
+.cal-week-total{background:transparent !important;border-left:1px solid var(--b0);margin-left:4px;padding-left:10px;justify-content:center;}
+.cal-week-total .cal-val{margin-top:0;font-size:13px;}
+.cal-week-empty{border-left:1px solid var(--b0);}
+/* Mini variant — 2× the previous compact height (was 42 → now ~84) so trade
+   counts have room. Slightly smaller fonts than the full view. */
+.cal-month-compact .cal-cell{min-height:84px;padding:5px 6px;}
+.cal-month-compact .cal-cell.cal-empty{min-height:84px;}
+.cal-month-compact .cal-val{font-size:11px;}
+.cal-month-compact .cal-day{font-size:9px;}
+.cal-month-compact .cal-cnt{font-size:8px;}
+.cal-month-compact .cal-dh{font-size:8px;padding:4px 3px 3px;}
+.cal-month-compact .cal-week-total .cal-val{font-size:12px;}
 
 /* GRID */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
@@ -2517,7 +2525,8 @@ function buildMonthGrid(month, dailyMap, dailyCount, pStart, pEnd, compact) {
     }
   }
 
-  // Build the day cells. 6 weeks max → 42 cells. Pad with leading/trailing empties.
+  // Build day cells (size 42, 6 weeks × 7 days). Empty cells fill before
+  // the 1st and after the last. Each cell records P&L, count, in-period.
   const cells = [];
   for (let i = 0; i < startCol; i++) cells.push({ empty: true });
   for (let d = 1; d <= totalDays; d++) {
@@ -2551,21 +2560,48 @@ function buildMonthGrid(month, dailyMap, dailyCount, pStart, pEnd, compact) {
     return (v<0?'-':'')+'$'+abs.toFixed(sigdig);
   };
 
-  const cellsHtml = cells.map(c => {
-    if (c.empty) return `<div class="cal-cell cal-empty"></div>`;
-    const tint = cellStyle(c);
-    const valHtml = c.v != null
-      ? `<div class="cal-val" style="color:${c.v>=0?'var(--gn)':'var(--rd)'}">${fmt(c.v)}</div>`
-      : '';
-    const cntHtml = (!compact && c.cnt > 0)
-      ? `<div class="cal-cnt">${c.cnt} ${c.cnt===1?'trade':'trades'}</div>`
-      : '';
-    return `<div class="cal-cell" style="${tint}">
-              <div class="cal-day">${c.d}</div>
-              ${valHtml}
-              ${cntHtml}
-            </div>`;
-  }).join('');
+  // Render week-by-week: 7 day cells + 1 week-total cell per row.
+  // Trade counts are shown on day cells in BOTH compact and full views (the
+  // user wants them on the mini too at 2× height).
+  const weekRows = [];
+  for (let w = 0; w < cells.length; w += 7) {
+    const wkCells = cells.slice(w, w + 7);
+    let wkSum = 0, wkCnt = 0, wkHasData = false;
+    for (const c of wkCells) {
+      if (c.empty || !c.inPeriod) continue;
+      if (c.v != null) { wkSum += c.v; wkHasData = true; }
+      if (c.cnt) wkCnt += c.cnt;
+    }
+    const dayHtml = wkCells.map(c => {
+      if (c.empty) return `<div class="cal-cell cal-empty"></div>`;
+      const tint = cellStyle(c);
+      const valHtml = c.v != null
+        ? `<div class="cal-val" style="color:${c.v>=0?'var(--gn)':'var(--rd)'}">${fmt(c.v)}</div>`
+        : '';
+      const cntHtml = (c.cnt > 0)
+        ? `<div class="cal-cnt">${c.cnt} ${c.cnt===1?'Trade':'Trades'}</div>`
+        : '';
+      return `<div class="cal-cell" style="${tint}">
+                <div class="cal-day">${c.d}</div>
+                ${valHtml}
+                ${cntHtml}
+              </div>`;
+    }).join('');
+    // Week-total cell — neutral background, colored text by sign. Empty if
+    // the row has no in-period activity.
+    let wkHtml;
+    if (!wkHasData && wkCnt === 0) {
+      wkHtml = `<div class="cal-cell cal-week-total cal-week-empty"></div>`;
+    } else {
+      const wkColor = wkSum >= 0 ? 'var(--gn)' : 'var(--rd)';
+      const wkValHtml = wkHasData
+        ? `<div class="cal-val" style="color:${wkColor}">${fmt(wkSum)}</div>` : '';
+      const wkCntHtml = wkCnt > 0
+        ? `<div class="cal-cnt">${wkCnt} ${wkCnt===1?'Trade':'Trades'}</div>` : '';
+      wkHtml = `<div class="cal-cell cal-week-total">${wkValHtml}${wkCntHtml}</div>`;
+    }
+    weekRows.push(dayHtml + wkHtml);
+  }
 
   const totalLbl = monthTotal !== 0
     ? `<span class="cal-mtotal ${monthTotal>=0?'cp2':'cn'}">${fDollar(monthTotal)}</span>`
@@ -2575,7 +2611,8 @@ function buildMonthGrid(month, dailyMap, dailyCount, pStart, pEnd, compact) {
       <div class="cal-mhdr"><span class="cal-mname">${monthName}</span> ${totalLbl}</div>
       <div class="cal-grid">
         ${dayHeaders.map(h=>`<div class="cal-dh">${h}</div>`).join('')}
-        ${cellsHtml}
+        <div class="cal-dh"></div>
+        ${weekRows.join('')}
       </div>
     </div>
   `;
