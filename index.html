@@ -112,18 +112,41 @@ input[type="file"]{display:none;}
 
 /* KPI GRID */
 .kg{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px;margin-bottom:18px;}
-.kpi{background:var(--bg2);border:1px solid var(--b0);border-radius:8px;padding:14px 16px;position:relative;transition:background .25s,border-color .12s,transform .12s;overflow:hidden;}
+.kpi{background:var(--bg2);border:1px solid var(--b0);border-radius:8px;padding:14px 16px;position:relative;transition:background .25s,border-color .12s,transform .12s;}
 .kpi:hover{transform:translateY(-1px);border-color:var(--b1);}
-.kab{position:absolute;bottom:0;left:0;right:0;height:2px;}
+.kab{position:absolute;bottom:0;left:0;right:0;height:2px;border-radius:0 0 8px 8px;}
 .kab.gn{background:var(--gn);}.kab.rd{background:var(--rd);}.kab.bl{background:var(--ac);}
 .kab.am{background:var(--am);}.kab.pu{background:var(--pu);}.kab.te{background:var(--te);}.kab.co{background:var(--co);}
 .kl{font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;display:flex;align-items:center;}
-.kv{font-family:var(--fd);font-size:24px;font-weight:700;line-height:1;margin-bottom:3px;letter-spacing:-.02em;}
+.kv{font-family:var(--fd);font-size:30px;font-weight:700;line-height:1.05;margin-bottom:4px;letter-spacing:-.02em;}
 .ks{font-size:10px;color:var(--t3);}
 .kv.pos{color:var(--gn);}.kv.neg{color:var(--rd);}.kv.warn{color:var(--am);}.kv.neu{color:var(--t0);}.kv.bl{color:var(--ac2);}
 .tip{margin-left:auto;color:var(--t3);cursor:help;font-size:10px;position:relative;}
 .tip:hover .tiptext{display:block;}
-.tiptext{display:none;position:absolute;right:0;top:16px;background:var(--bg5);border:1px solid var(--b2);color:var(--t1);font-size:10px;text-transform:none;letter-spacing:0;line-height:1.6;padding:8px 10px;border-radius:6px;width:200px;z-index:50;white-space:normal;box-shadow:var(--sh);}
+.tiptext{display:none;position:absolute;right:0;top:18px;background:var(--bg5);border:1px solid var(--b2);color:var(--t1);font-size:11px;text-transform:none;letter-spacing:0;line-height:1.55;padding:10px 12px;border-radius:6px;width:240px;z-index:1000;white-space:normal;box-shadow:var(--sh);font-weight:400;}
+
+/* CALENDAR */
+.cal-full-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+@media(max-width:1100px){.cal-full-grid{grid-template-columns:1fr;}}
+.cal-month{display:flex;flex-direction:column;gap:6px;}
+.cal-mhdr{display:flex;align-items:baseline;gap:10px;padding:0 2px 4px;border-bottom:1px solid var(--b0);}
+.cal-mname{font-family:var(--fm);font-size:13px;font-weight:600;color:var(--t0);}
+.cal-mtotal{font-family:var(--fd);font-size:13px;font-weight:600;}
+.cal-mtotal.cp2{color:var(--gn);}
+.cal-mtotal.cn{color:var(--rd);}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+.cal-dh{font-family:var(--fm);font-size:8px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;text-align:left;padding:6px 4px 4px;}
+.cal-cell{position:relative;min-height:62px;padding:5px 7px;border-radius:3px;display:flex;flex-direction:column;justify-content:flex-start;background:var(--bg1);transition:background .12s;}
+.cal-cell.cal-empty{background:transparent;min-height:62px;}
+.cal-day{font-family:var(--fm);font-size:9px;color:var(--t3);font-weight:500;}
+.cal-val{font-family:var(--fd);font-size:12px;font-weight:600;margin-top:auto;}
+.cal-cnt{font-family:var(--fm);font-size:9px;color:var(--t3);margin-top:1px;}
+/* Mini variant — half height + smaller text */
+.cal-month-compact .cal-cell{min-height:42px;padding:3px 5px;}
+.cal-month-compact .cal-cell.cal-empty{min-height:42px;}
+.cal-month-compact .cal-val{font-size:10px;}
+.cal-month-compact .cal-day{font-size:8px;}
+.cal-month-compact .cal-dh{font-size:7px;padding:4px 3px 3px;}
 
 /* GRID */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
@@ -277,6 +300,7 @@ tbody tr:hover td{background:var(--bg3);}
       <div class="tab" onclick="showTab('pos',this)">Open Positions</div>
       <div class="tab" onclick="showTab('chains',this)">Closed Trades</div>
       <div class="tab" onclick="showTab('tx',this)">Transactions</div>
+      <div class="tab" onclick="showTab('cal',this)">Calendar</div>
       <div class="tab" onclick="showTab('an',this)">Analytics</div>
     </div>
 
@@ -288,13 +312,13 @@ tbody tr:hover td{background:var(--bg3);}
         <div class="card"><div class="ch"><span class="ct">Monthly P&L</span></div><div class="cb"><div class="cw" style="height:200px"><canvas id="cc-mon"></canvas></div></div></div>
       </div>
       <div class="g3">
-        <div class="card"><div class="ch"><span class="ct">Strategy P&L</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-strat"></canvas></div></div></div>
-        <div class="card"><div class="ch"><span class="ct">Win Rate by Strategy</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-wr"></canvas></div></div></div>
-        <div class="card"><div class="ch"><span class="ct">Top Underlyings by P&L</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-und"></canvas></div></div></div>
+        <div class="card"><div class="ch"><span class="ct">Strategy Mix (P&L Contribution)</span></div><div class="cb"><div class="cw" style="height:240px"><canvas id="cc-strat"></canvas></div></div></div>
+        <div class="card"><div class="ch"><span class="ct">Win Rate by Strategy</span></div><div class="cb"><div class="cw" style="height:240px"><canvas id="cc-wr"></canvas></div></div></div>
+        <div class="card"><div class="ch"><span class="ct">Top Underlyings by P&L</span></div><div class="cb"><div class="cw" style="height:240px"><canvas id="cc-und"></canvas></div></div></div>
       </div>
-      <div class="g2">
-        <div class="card"><div class="ch"><span class="ct">Instrument Mix (by Volume)</span></div><div class="cb"><div class="cw" style="height:160px"><canvas id="cc-mix"></canvas></div></div></div>
-        <div class="card"><div class="ch"><span class="ct">Dividends &amp; Income</span><span class="cm" id="div-lbl"></span></div><div class="cb"><div class="cw" style="height:160px"><canvas id="cc-div"></canvas></div></div></div>
+      <div class="card" style="cursor:pointer" onclick="showTab('cal')">
+        <div class="ch"><span class="ct">Daily P&L Calendar</span><span class="cm" id="cal-mini-lbl">Click for full view</span></div>
+        <div class="cb" id="cal-mini" style="padding:14px"></div>
       </div>
     </div>
 
@@ -350,6 +374,8 @@ tbody tr:hover td{background:var(--bg3);}
               <th onclick="sortTbl('chains','daysHeld')">Days</th>
               <th onclick="sortTbl('chains','rollCount')">Rolls</th>
               <th onclick="sortTbl('chains','totalPnl')">P&L</th>
+              <th onclick="sortTbl('chains','plPct')">P&L %</th>
+              <th onclick="sortTbl('chains','plPctAnn')">Ann. P&L %</th>
               <th>Result</th>
             </tr></thead>
             <tbody id="chains-body"></tbody>
@@ -392,11 +418,19 @@ tbody tr:hover td{background:var(--bg3);}
       </div>
     </div>
 
+    <!-- CALENDAR -->
+    <div class="tp" id="tp-cal">
+      <div class="card">
+        <div class="ch"><span class="ct">Daily P&L Calendar</span><span class="cm" id="cal-lbl"></span></div>
+        <div class="cb" id="cal-full" style="padding:18px"></div>
+      </div>
+    </div>
+
     <!-- ANALYTICS -->
     <div class="tp" id="tp-an">
       <div class="g2">
         <div class="card"><div class="ch"><span class="ct">Drawdown</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-dd"></canvas></div></div></div>
-        <div class="card"><div class="ch"><span class="ct">Daily P&L Distribution</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-hist"></canvas></div></div></div>
+        <div class="card"><div class="ch"><span class="ct">Rolling 30-Day Sortino</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-rsort"></canvas></div></div></div>
       </div>
       <div class="g2">
         <div class="card"><div class="ch"><span class="ct">Rolling 30-Day Sharpe</span></div><div class="cb"><div class="cw" style="height:180px"><canvas id="cc-sh"></canvas></div></div></div>
@@ -532,7 +566,9 @@ const decodeFuturesExpiry = sym => {
 // ── STRATEGY CLASSIFICATION ──────────────────────────────────────────────────
 // Called on the opening legs of a chain (the initial Order # rows).
 const classifyStrategy = (legs, instrCode) => {
-  const prefix = instrCode.startsWith('FUT') ? 'Futures ' : '';
+  // Futures and equity options share strategy names — a /ES short put and an
+  // SPX short put are both "Short Put". Instrument type is shown separately
+  // via the Type column, so the strategy label needn't repeat that info.
   const n = legs.length;
   const cps = [...new Set(legs.map(l => (l.callPut || '').toUpperCase()).filter(Boolean))];
   const exps = [...new Set(legs.map(l => l.expiry).filter(Boolean))];
@@ -546,34 +582,75 @@ const classifyStrategy = (legs, instrCode) => {
   if (n === 1) {
     const cp = cps[0] || '';
     if (instrCode === 'EQ' || instrCode === 'FUT') {
-      return isShort ? `${prefix}Short` : `${prefix}Long`;
+      return isShort ? 'Short' : 'Long';
     }
-    if (isShort) return cp === 'CALL' ? `${prefix}Short Call` : cp === 'PUT' ? `${prefix}Short Put` : `${prefix}Short`;
-    if (isLong)  return cp === 'CALL' ? `${prefix}Long Call`  : cp === 'PUT' ? `${prefix}Long Put`  : `${prefix}Long`;
+    if (isShort) return cp === 'CALL' ? 'Short Call' : cp === 'PUT' ? 'Short Put' : 'Short';
+    if (isLong)  return cp === 'CALL' ? 'Long Call'  : cp === 'PUT' ? 'Long Put'  : 'Long';
   }
+
   if (n === 2) {
-    if (exps.length === 2 && strikes.length === 1) return `${prefix}Calendar`;
-    if (exps.length === 2 && strikes.length === 2) return `${prefix}Diagonal`;
+    if (exps.length === 2 && strikes.length === 1) return 'Calendar';
+    if (exps.length === 2 && strikes.length === 2) return 'Diagonal';
     if (exps.length === 1) {
-      if (cps.length === 2) return hasSTO ? `${prefix}Short Strangle` : `${prefix}Long Strangle`;
+      // Same expiry, two strikes — could be strangle/straddle (one call + one put)
+      // or a vertical spread (two of same C/P).
+      if (cps.length === 2) {
+        // One call + one put. Same-strike = straddle; different-strike = strangle.
+        const sameStrike = strikes.length === 1;
+        if (sameStrike) {
+          if (isShort) return 'Short Straddle';
+          if (isLong)  return 'Long Straddle';
+        } else {
+          if (isShort) return 'Short Strangle';
+          if (isLong)  return 'Long Strangle';
+        }
+      }
       if (cps.length === 1) {
         const cp = cps[0];
-        if (hasSTO && hasBTO) return cp === 'CALL' ? `${prefix}Call Vertical` : `${prefix}Put Vertical`;
-        if (isShort)          return cp === 'CALL' ? `${prefix}Short Call Spread` : `${prefix}Short Put Spread`;
-        if (isLong)           return cp === 'CALL' ? `${prefix}Long Call Spread`  : `${prefix}Long Put Spread`;
+        if (hasSTO && hasBTO) return cp === 'CALL' ? 'Call Vertical' : 'Put Vertical';
+        if (isShort)          return cp === 'CALL' ? 'Short Call Spread' : 'Short Put Spread';
+        if (isLong)           return cp === 'CALL' ? 'Long Call Spread'  : 'Long Put Spread';
       }
     }
   }
+
+  if (n === 3) {
+    // Jade Lizard: one short put + a short call vertical (short call closer to
+    // money + long call further OTM). All same expiry. Net credit shape with
+    // no upside risk if credit ≥ call-spread width.
+    // Detection: same expiry, exactly 1 put leg + 2 call legs, the put is STO,
+    // and the calls are one STO + one BTO with the BTO strike > STO strike.
+    if (exps.length === 1) {
+      const puts = legs.filter(l => (l.callPut||'').toUpperCase() === 'PUT');
+      const calls = legs.filter(l => (l.callPut||'').toUpperCase() === 'CALL');
+      if (puts.length === 1 && calls.length === 2) {
+        const putAct = (puts[0].action || '').toUpperCase();
+        const callActs = calls.map(c => (c.action || '').toUpperCase());
+        const callSTO = calls.find(c => (c.action || '').toUpperCase() === 'SELL_TO_OPEN');
+        const callBTO = calls.find(c => (c.action || '').toUpperCase() === 'BUY_TO_OPEN');
+        if (putAct === 'SELL_TO_OPEN' && callSTO && callBTO &&
+            callBTO.strike > callSTO.strike) {
+          return 'Jade Lizard';
+        }
+        // Reverse Jade Lizard: short call + short put spread. Less common but
+        // a recognized variant. Detect: 1 call + 2 puts, call STO, puts one
+        // STO and one BTO with BTO strike < STO strike.
+        // (Skipping for simplicity — fall through to 3-Leg Spread.)
+      }
+    }
+    return '3-Leg Spread';
+  }
+
   if (n === 4) {
-    if (exps.length === 1 && cps.length === 2) return `${prefix}Iron Condor`;
+    if (exps.length === 1 && cps.length === 2) return 'Iron Condor';
     if (exps.length === 1 && cps.length === 1) {
       const cp = cps[0];
-      return cp === 'CALL' ? `${prefix}Call Butterfly` : `${prefix}Put Butterfly`;
+      return cp === 'CALL' ? 'Call Butterfly' : 'Put Butterfly';
     }
-    if (exps.length === 2 && cps.length === 2) return `${prefix}Iron Condor Roll`;
-    return `${prefix}4-Leg Spread`;
+    if (exps.length === 2 && cps.length === 2) return 'Iron Condor Roll';
+    return '4-Leg Spread';
   }
-  return `${prefix}${n}-Leg Spread`;
+  return `${n}-Leg Spread`;
 };
 
 // ── PARSE ROWS ───────────────────────────────────────────────────────────────
@@ -1042,6 +1119,21 @@ const buildChains = rows => {
     ch.totalPnl = realized;
     ch.eqCostBasis = eqCost; // exposed for debugging / cost-basis display
 
+    // P/L% — pct return on opening premium. Denominator is |sum of opening
+    // leg totals|; for a credit trade this is the premium received, for a
+    // debit trade this is the premium paid. Either way, it's the natural
+    // base for "% return on this trade." Set null when no opening premium
+    // exists (e.g. assignment-only chains where opening was a Receive Deliver
+    // event with $0 cash impact).
+    const openingLegs = ch.legs.filter(l => isOpen(l.action));
+    const openingPremium = openingLegs.reduce((s, l) => s + l.total, 0);
+    const openingBase = Math.abs(openingPremium);
+    if (openingBase > 1) {
+      ch.plPct = ch.totalPnl / openingBase;
+    } else {
+      ch.plPct = null;
+    }
+
     // Opening legs = legs from the initial open order
     const openLegs = ch.legs.filter(l => isOpen(l.action));
 
@@ -1059,6 +1151,18 @@ const buildChains = rows => {
       ch.daysHeld = Math.round((new Date() - ch.openDate) / 86400000);
     } else {
       ch.daysHeld = 0;
+    }
+
+    // Annualized P/L% — extrapolate the realized return to a full year.
+    // Same-day trades (daysHeld=0) treated as 1-day for the math. Capped at
+    // ±999% to keep the column readable (a 1-day +5% trade extrapolates to
+    // ~1825% which is mathematically correct but not useful information).
+    if (ch.plPct != null) {
+      const days = Math.max(ch.daysHeld, 1);
+      const ann = ch.plPct * (365 / days);
+      ch.plPctAnn = Math.max(-9.99, Math.min(9.99, ann));
+    } else {
+      ch.plPctAnn = null;
     }
 
     // Symbols in this chain
@@ -1079,6 +1183,79 @@ const buildChains = rows => {
             strike: latest?.strike,
             callPut: latest?.callPut,
           });
+        }
+      }
+    }
+  }
+
+  // ── POST-FINALIZE: STRANGLE / STRADDLE / JADE LIZARD RE-TAG ─────────────
+  // The chain key is (underly, callPut), so a strangle's call and put always
+  // end up in separate chains. We can't merge them without rewriting the
+  // chain builder, but we CAN identify the *intent* by walking opening
+  // orders: any order with a call+put combination at the same expiry on
+  // the same underlying is a strangle/straddle, and we re-tag both chains
+  // so they show the right strategy name. P&L tracking is unaffected —
+  // each chain still owns its half of the trade — but the dashboard will
+  // group them correctly under "Short Strangle" instead of "Short Call".
+  //
+  // Process: walk the opening orders. For each order, look at its
+  // option-classified opening legs and detect:
+  //   - 2 legs, 1 call + 1 put, same expiry, same underly:
+  //       → same-strike = Straddle, different-strike = Strangle
+  //   - 3 legs, 1 short put + (1 short call + 1 long call further OTM):
+  //       → Jade Lizard
+  // Then look up which chain(s) own those legs and re-tag.
+  for (const orderRows of Object.values(orderMap)) {
+    // Only consider option-only opening orders
+    const opens = orderRows.filter(r =>
+      isOpen(r.action) &&
+      (r.instrType === 'EQ_OPT' || r.instrType === 'FUT_OPT')
+    );
+    if (opens.length < 2) continue;
+    const sameUnderly = new Set(opens.map(r => r.underly)).size === 1;
+    const sameExpiry  = new Set(opens.map(r => r.expiry)).size === 1;
+    if (!sameUnderly || !sameExpiry) continue;
+
+    const calls = opens.filter(r => (r.callPut||'').toUpperCase() === 'CALL');
+    const puts  = opens.filter(r => (r.callPut||'').toUpperCase() === 'PUT');
+
+    // Detect 2-leg strangle/straddle (1 call + 1 put)
+    if (opens.length === 2 && calls.length === 1 && puts.length === 1) {
+      const call = calls[0], put = puts[0];
+      const callDir = (call.action||'').toUpperCase();
+      const putDir  = (put.action||'').toUpperCase();
+      // Both must be same direction (both STO or both BTO)
+      const isShort = callDir === 'SELL_TO_OPEN' && putDir === 'SELL_TO_OPEN';
+      const isLong  = callDir === 'BUY_TO_OPEN'  && putDir === 'BUY_TO_OPEN';
+      if (isShort || isLong) {
+        const sameStrike = call.strike === put.strike;
+        const tag = sameStrike
+          ? (isShort ? 'Short Straddle' : 'Long Straddle')
+          : (isShort ? 'Short Strangle' : 'Long Strangle');
+        // Find the chains owning each leg by symbol → ledger → chainId
+        for (const leg of opens) {
+          const ledg = symLedger[leg.symbol];
+          if (!ledg) continue;
+          const ch = chains[ledg.chainId];
+          if (ch) ch.strategy = tag;
+        }
+      }
+      continue;
+    }
+
+    // Detect 3-leg Jade Lizard (1 short put + 1 short call + 1 long call OTM)
+    if (opens.length === 3 && puts.length === 1 && calls.length === 2) {
+      const put = puts[0];
+      const callSTO = calls.find(c => (c.action||'').toUpperCase() === 'SELL_TO_OPEN');
+      const callBTO = calls.find(c => (c.action||'').toUpperCase() === 'BUY_TO_OPEN');
+      const putAct = (put.action||'').toUpperCase();
+      if (putAct === 'SELL_TO_OPEN' && callSTO && callBTO &&
+          callBTO.strike > callSTO.strike) {
+        for (const leg of opens) {
+          const ledg = symLedger[leg.symbol];
+          if (!ledg) continue;
+          const ch = chains[ledg.chainId];
+          if (ch) ch.strategy = 'Jade Lizard';
         }
       }
     }
@@ -1205,6 +1382,33 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
   const dStd  = dRets.length > 1 ? Math.sqrt(dRets.reduce((s, r) => s + r * r, 0) / dRets.length) : 1;
   const sortino = dStd > 0 ? (mu / dStd) * Math.sqrt(252) : 0;
 
+  // Rolling 30-day Sortino series. For each day in dailySeries, look back
+  // up to 30 entries (≈ 30 trading days, ≈ 6 weeks calendar). Compute
+  // Sortino on that window. Annualize × √252 to match the static Sortino
+  // KPI. Only emit a value once we have at least 10 days of history;
+  // earlier days are null so the chart doesn't draw misleading early values.
+  const ROLL_WINDOW = 30;
+  const MIN_OBS = 10;
+  const rollingSortinoSeries = [];
+  for (let i = 0; i < dailySeries.length; i++) {
+    const start = Math.max(0, i - ROLL_WINDOW + 1);
+    const window = returns.slice(start, i + 1);
+    if (window.length < MIN_OBS) {
+      rollingSortinoSeries.push({ date: dailySeries[i].date, sortino: null });
+      continue;
+    }
+    const wmu = window.reduce((a, b) => a + b, 0) / window.length;
+    const wDown = window.filter(r => r < 0);
+    if (wDown.length < 2) {
+      // No (or one) negative day in window — Sortino is undefined / extreme
+      rollingSortinoSeries.push({ date: dailySeries[i].date, sortino: null });
+      continue;
+    }
+    const wDstd = Math.sqrt(wDown.reduce((s, r) => s + r * r, 0) / wDown.length);
+    const wSortino = wDstd > 0 ? (wmu / wDstd) * Math.sqrt(252) : 0;
+    rollingSortinoSeries.push({ date: dailySeries[i].date, sortino: wSortino });
+  }
+
   // Drawdown — dollar terms (peak-to-trough on cumulative realized P&L).
   // We keep both: maxDDPct (for legacy) and maxDD ($) for display.
   let peakD = 0, maxDD = 0, maxDDPct = 0;
@@ -1293,7 +1497,7 @@ const computeMetrics = (chains, allRows, periodStart, periodEnd) => {
     winRate, avgWin, avgLoss, profFac,
     wins: wins.length, losses: losses.length, tradeable: tradeable.length,
     avgDaysHeld, medianDaysHeld,
-    closed, open, dailySeries, ddSeries, returns, n, yrs,
+    closed, open, dailySeries, ddSeries, rollingSortinoSeries, returns, n, yrs,
     startEquity, endEquity, stratMap,
     allClosed: chains.filter(c => c.status === 'closed'),
   };
@@ -1977,6 +2181,7 @@ function renderAll() {
 
   renderKPIs(M);
   renderCharts(M, pStart, pEnd);
+  renderCalendar(M, pStart, pEnd);
   renderOpenPositions(openChains);
   renderClosedChains(M.allClosed);
   renderTxTable();
@@ -2112,9 +2317,11 @@ function renderCharts(M, pStart, pEnd) {
     options:bOpts(c, v=>'$'+fK(v))
   });
 
-  // 3. Strategy P&L (horizontal bar, top 10)
+  // 3. Strategy Mix — full breakdown (all strategies that closed in period),
+  // signed horizontal bar by P&L contribution. Sorted by absolute magnitude
+  // so most-impactful strategies (whether winning or losing) appear first.
   const stratEntries = Object.entries(M.stratMap)
-    .sort((a,b)=>Math.abs(b[1].pnl)-Math.abs(a[1].pnl)).slice(0,10);
+    .sort((a,b)=>Math.abs(b[1].pnl)-Math.abs(a[1].pnl));
   S.charts.strat = new Chart(document.getElementById('cc-strat').getContext('2d'),{
     type:'bar',
     data:{ labels:stratEntries.map(([s])=>s),
@@ -2151,42 +2358,7 @@ function renderCharts(M, pStart, pEnd) {
     options:{...bOpts(c,v=>'$'+fK(v)), indexAxis:'y'}
   });
 
-  // 6. Instrument mix donut
-  const iMap={};
-  S.rawRows.filter(r=>r.date>=pStart&&r.date<=pEnd&&r.type==='Trade')
-    .forEach(r=>{ iMap[r.instrType]=(iMap[r.instrType]||0)+Math.abs(r.value); });
-  const iL={'EQ_OPT':'EQ Options','FUT_OPT':'Fut Options','FUT':'Futures','EQ':'Equity','OTHER':'Other'};
-  const iC=[c.bl,c.pu,c.am,c.gn,c.te];
-  const iE=Object.entries(iMap).filter(([,v])=>v>0);
-  S.charts.mix = new Chart(document.getElementById('cc-mix').getContext('2d'),{
-    type:'doughnut',
-    data:{ labels:iE.map(([k])=>iL[k]||k), datasets:[{
-      data:iE.map(([,v])=>v), backgroundColor:iC, borderWidth:1,
-      borderColor:S.theme==='dark'?'#111b2e':'#faf7f2'
-    }]},
-    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
-      plugins:{ legend:{ display:true, position:'bottom',
-        labels:{color:c.tick,font:{family:"'DM Mono',monospace",size:9},boxWidth:10,padding:8}
-      }, tooltip:{...bOpts(c).plugins.tooltip} }
-    }
-  });
-
-  // 7. Dividends monthly
-  const divMap={};
-  S.rawRows.filter(r=>r.type==='Money Movement'&&r.subType==='Dividend'&&r.date>=pStart&&r.date<=pEnd)
-    .forEach(r=>{ const k=ENGINE.ds(r.date).slice(0,7); divMap[k]=(divMap[k]||0)+r.total; });
-  const divK=Object.keys(divMap).sort(), divV=divK.map(k=>divMap[k]);
-  const divTotal = divV.reduce((s,v)=>s+v,0);
-  document.getElementById('div-lbl').textContent = '$'+divTotal.toLocaleString(undefined,{maximumFractionDigits:0})+' total';
-  S.charts.div = new Chart(document.getElementById('cc-div').getContext('2d'),{
-    type:'bar',
-    data:{ labels:divK.map(k=>k.slice(2)), datasets:[{
-      data:divV, backgroundColor:c.te+'bb', borderRadius:3
-    }]},
-    options:bOpts(c, v=>'$'+fK(v))
-  });
-
-  // 8. Drawdown
+  // 6. Drawdown
   S.charts.dd = new Chart(document.getElementById('cc-dd').getContext('2d'),{
     type:'line',
     data:{ labels:M.ddSeries.map(d=>d.date), datasets:[{
@@ -2197,24 +2369,22 @@ function renderCharts(M, pStart, pEnd) {
     options:bOpts(c, v=>v.toFixed(0)+'%')
   });
 
-  // 9. Daily P&L histogram
-  if (M.returns.length > 4) {
-    const B=24, minR=Math.min(...M.returns), maxR=Math.max(...M.returns), bS=(maxR-minR)/B;
-    if (bS > 0) {
-      const h=Array(B).fill(0);
-      M.returns.forEach(r=>{const i=Math.min(Math.floor((r-minR)/bS),B-1);h[i]++;});
-      const bL=h.map((_,i)=>'$'+(minR+i*bS).toFixed(0));
-      S.charts.hist = new Chart(document.getElementById('cc-hist').getContext('2d'),{
-        type:'bar',
-        data:{ labels:bL, datasets:[{ data:h,
-          backgroundColor:bL.map(l=>parseFloat(l.slice(1))>=0?c.gn+'99':c.rd+'99'), borderRadius:2
-        }]},
-        options:{...bOpts(c), scales:{...bOpts(c).scales, x:{...bOpts(c).scales.x, ticks:{...bOpts(c).scales.x.ticks,maxTicksLimit:8}}}}
-      });
-    }
+  // 7. Rolling 30-day Sortino (replaces the old daily P&L histogram).
+  // Annualized × √252. We skip null entries (early days with too few obs).
+  const rsort = (M.rollingSortinoSeries || []).filter(p => p.sortino != null);
+  if (rsort.length) {
+    S.charts.rsort = new Chart(document.getElementById('cc-rsort').getContext('2d'),{
+      type:'line',
+      data:{ labels:rsort.map(p=>p.date), datasets:[{
+        data:rsort.map(p=>p.sortino),
+        borderColor:c.te, backgroundColor:c.te+'20',
+        fill:true, tension:.3, pointRadius:0, borderWidth:1.5
+      }]},
+      options:bOpts(c, v=>v.toFixed(2))
+    });
   }
 
-  // 10. Rolling 30-day Sharpe
+  // 8. Rolling 30-day Sharpe
   if (M.returns.length >= 30) {
     const roll=[], rollL=[];
     for(let i=29;i<M.returns.length;i++){
@@ -2249,6 +2419,166 @@ function renderCharts(M, pStart, pEnd) {
       options:bOpts(c)
     });
   }
+}
+
+// ─────────────────────────────────────────────
+//  CALENDAR  (mini on overview + full page tab)
+// ─────────────────────────────────────────────
+//  Daily P&L heatmap as a month-grid calendar. We render two views:
+//    - cal-mini: just the most-recent month with activity, on the Overview
+//    - cal-full: every month in the selected period, on the Calendar tab
+//  Cells are tinted green/red proportional to magnitude. Days outside the
+//  period are grayed out.
+function renderCalendar(M, pStart, pEnd) {
+  // Build dailyMap from M.dailySeries (date string → daily P&L).
+  // dailySeries only contains days with activity, but the calendar must show
+  // every calendar day — so non-activity days simply don't get a $ value.
+  const dailyMap = {};
+  let dailyCount = {};  // date → trade count for the day
+  for (const d of M.dailySeries) {
+    dailyMap[d.date] = d.daily;
+  }
+  // Trade-count per day from raw rows (period-bounded)
+  for (const r of S.rawRows) {
+    if (r.date < pStart || r.date > pEnd) continue;
+    if (r.type !== 'Trade' && r.type !== 'Receive Deliver') continue;
+    const k = ENGINE.ds(r.date);
+    dailyCount[k] = (dailyCount[k] || 0) + 1;
+  }
+
+  // Determine month range. For the FULL view we walk every month touched by
+  // the period. For the MINI view we just take the most recent month with
+  // activity (or the period's last month if no activity).
+  const allDayKeys = Object.keys(dailyMap);
+  // Period boundaries
+  const periodFirstYM = `${pStart.getFullYear()}-${String(pStart.getMonth()+1).padStart(2,'0')}`;
+  const periodLastYM  = `${pEnd.getFullYear()}-${String(pEnd.getMonth()+1).padStart(2,'0')}`;
+
+  // Month list spanning period
+  const monthsInPeriod = [];
+  {
+    let y = pStart.getFullYear(), m = pStart.getMonth();
+    const endY = pEnd.getFullYear(), endM = pEnd.getMonth();
+    while (y < endY || (y === endY && m <= endM)) {
+      monthsInPeriod.push({ y, m });
+      m++;
+      if (m > 11) { m = 0; y++; }
+    }
+  }
+
+  // Most recent month (for the mini)
+  const lastActivityKey = allDayKeys.sort().pop();
+  let miniMonth;
+  if (lastActivityKey) {
+    const dt = new Date(lastActivityKey + 'T12:00:00');
+    miniMonth = { y: dt.getFullYear(), m: dt.getMonth() };
+  } else {
+    miniMonth = monthsInPeriod[monthsInPeriod.length - 1] || { y: pEnd.getFullYear(), m: pEnd.getMonth() };
+  }
+
+  // ── Render mini (single month, compact) ─────────────────────────────────
+  const miniEl = document.getElementById('cal-mini');
+  if (miniEl) miniEl.innerHTML = miniMonth ? buildMonthGrid(miniMonth, dailyMap, dailyCount, pStart, pEnd, true) : '';
+
+  // ── Render full (all months in period, descending in time) ──────────────
+  const fullEl = document.getElementById('cal-full');
+  if (fullEl) {
+    // Show most-recent month first, descending. Two-column responsive grid.
+    const desc = [...monthsInPeriod].reverse();
+    const html = desc.map(month => buildMonthGrid(month, dailyMap, dailyCount, pStart, pEnd, false)).join('');
+    fullEl.innerHTML = `<div class="cal-full-grid">${html}</div>`;
+
+    // Header label: total period P&L
+    const lbl = document.getElementById('cal-lbl');
+    if (lbl) {
+      const total = M.dailySeries.reduce((s,d) => s + d.daily, 0);
+      lbl.textContent = `${desc.length} months · ${fDollar(total)} period total`;
+    }
+  }
+}
+
+// Build one month's HTML grid. `compact` shrinks padding/font for the mini view.
+function buildMonthGrid(month, dailyMap, dailyCount, pStart, pEnd, compact) {
+  const { y, m } = month;
+  const monthName = new Date(y, m, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' });
+  const firstDay = new Date(y, m, 1);
+  const lastDay  = new Date(y, m + 1, 0);
+  const startCol = firstDay.getDay(); // 0=Sun
+  const totalDays = lastDay.getDate();
+
+  // Compute month total + max abs daily (for color scaling)
+  let monthTotal = 0, maxAbs = 0;
+  for (let d = 1; d <= totalDays; d++) {
+    const k = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const v = dailyMap[k];
+    if (v != null) {
+      monthTotal += v;
+      if (Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+    }
+  }
+
+  // Build the day cells. 6 weeks max → 42 cells. Pad with leading/trailing empties.
+  const cells = [];
+  for (let i = 0; i < startCol; i++) cells.push({ empty: true });
+  for (let d = 1; d <= totalDays; d++) {
+    const dt = new Date(y, m, d);
+    const k = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const v = dailyMap[k];
+    const cnt = dailyCount[k] || 0;
+    const inPeriod = dt >= pStart && dt <= pEnd;
+    cells.push({ d, v, cnt, inPeriod });
+  }
+  while (cells.length % 7 !== 0) cells.push({ empty: true });
+
+  const dayHeaders = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+  const sigdig = compact ? 1 : 0;
+
+  // Color helper: tint by sign + magnitude (% of max abs in this month)
+  const cellStyle = c => {
+    if (c.empty) return 'background:transparent';
+    if (!c.inPeriod) return 'background:var(--bg1);opacity:0.3';
+    if (c.v == null) return 'background:var(--bg1)';
+    const intensity = maxAbs > 0 ? Math.min(1, Math.abs(c.v)/maxAbs) : 0;
+    const alpha = 0.18 + intensity * 0.55;
+    if (c.v >= 0) return `background:rgba(34,211,160,${alpha.toFixed(2)})`;
+    return `background:rgba(239,79,95,${alpha.toFixed(2)})`;
+  };
+
+  const fmt = v => {
+    if (v == null) return '';
+    const abs = Math.abs(v);
+    if (abs >= 1000) return (v<0?'-':'')+'$'+(abs/1000).toFixed(1)+'K';
+    return (v<0?'-':'')+'$'+abs.toFixed(sigdig);
+  };
+
+  const cellsHtml = cells.map(c => {
+    if (c.empty) return `<div class="cal-cell cal-empty"></div>`;
+    const tint = cellStyle(c);
+    const valHtml = c.v != null
+      ? `<div class="cal-val" style="color:${c.v>=0?'var(--gn)':'var(--rd)'}">${fmt(c.v)}</div>`
+      : '';
+    const cntHtml = (!compact && c.cnt > 0)
+      ? `<div class="cal-cnt">${c.cnt} ${c.cnt===1?'trade':'trades'}</div>`
+      : '';
+    return `<div class="cal-cell" style="${tint}">
+              <div class="cal-day">${c.d}</div>
+              ${valHtml}
+              ${cntHtml}
+            </div>`;
+  }).join('');
+
+  const totalLbl = monthTotal !== 0
+    ? `<span class="cal-mtotal ${monthTotal>=0?'cp2':'cn'}">${fDollar(monthTotal)}</span>`
+    : '';
+  return `
+    <div class="cal-month ${compact?'cal-month-compact':''}">
+      <div class="cal-mhdr"><span class="cal-mname">${monthName}</span> ${totalLbl}</div>
+      <div class="cal-grid">
+        ${dayHeaders.map(h=>`<div class="cal-dh">${h}</div>`).join('')}
+        ${cellsHtml}
+      </div>
+    </div>
+  `;
 }
 
 // ─────────────────────────────────────────────
@@ -2337,9 +2667,25 @@ function filterChains() {
 
   const body = document.getElementById('chains-body');
   if (!filtered.length) {
-    body.innerHTML='<tr><td colspan="10" style="text-align:center;padding:28px;color:var(--t3)">No matching closed trades</td></tr>';
+    body.innerHTML='<tr><td colspan="12" style="text-align:center;padding:28px;color:var(--t3)">No matching closed trades</td></tr>';
     return;
   }
+
+  // Format P/L % values:
+  //   plPct is a fractional number (0.42 = +42%); shown as "+42.1%" or "—"
+  //   plPctAnn is also a fraction, capped at ±9.99 (= ±999%) by the engine.
+  //     If at the cap, prefix with ">" or "<" to indicate truncation.
+  const fmtPct = v => {
+    if (v == null) return '<span style="color:var(--t3)">—</span>';
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${(v*100).toFixed(1)}%`;
+  };
+  const fmtPctAnn = v => {
+    if (v == null) return '<span style="color:var(--t3)">—</span>';
+    const atCap = Math.abs(v) >= 9.99;
+    const prefix = atCap ? (v > 0 ? '>+' : '<-') : (v >= 0 ? '+' : '');
+    return `${prefix}${Math.abs(v*100).toFixed(0)}%`;
+  };
 
   body.innerHTML = filtered.slice(0,500).map(ch=>`
     <tr>
@@ -2352,6 +2698,8 @@ function filterChains() {
       <td>${ch.daysHeld}d</td>
       <td style="color:var(--t3)">${ch.rollCount||0}</td>
       <td class="${ch.totalPnl>=0?'cp2':'cn'}" style="font-weight:500">${fDollar(ch.totalPnl)}</td>
+      <td class="${(ch.plPct||0)>=0?'cp2':'cn'}" style="font-size:12px">${fmtPct(ch.plPct)}</td>
+      <td class="${(ch.plPctAnn||0)>=0?'cp2':'cn'}" style="font-size:12px">${fmtPctAnn(ch.plPctAnn)}</td>
       <td><span class="tag tag-${ch.totalPnl>=0?'WIN':'LOSS'}">${ch.totalPnl>=0?'WIN':'LOSS'}</span></td>
     </tr>`).join('');
 }
@@ -2397,8 +2745,15 @@ function filterTx() {
 function showTab(n, el) {
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
   document.querySelectorAll('.tp').forEach(t=>t.classList.remove('on'));
-  el.classList.add('on');
-  document.getElementById('tp-'+n).classList.add('on');
+  // If el wasn't passed (e.g., programmatic navigation from a widget click),
+  // find the tab whose onclick references this name.
+  if (!el) {
+    el = [...document.querySelectorAll('.tab')]
+      .find(t => (t.getAttribute('onclick') || '').includes(`'${n}'`));
+  }
+  if (el) el.classList.add('on');
+  const tp = document.getElementById('tp-'+n);
+  if (tp) tp.classList.add('on');
 }
 
 // ─────────────────────────────────────────────
